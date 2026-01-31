@@ -13,19 +13,22 @@ import Testing
     #expect(attributes.isDirectory == false)
     #expect(attributes.fileType == "????")
     #expect(attributes.fileCreator == "UNIX")
-    guard let expectedCreated = Calendar(identifier: .gregorian).date(
+    guard let baseCreatedUTC = Calendar(identifier: .gregorian).date(
         from: DateComponents(
             timeZone: TimeZone(secondsFromGMT: 0),
             year: 2026,
             month: 1,
             day: 31,
-            hour: 5,
+            hour: 0,
             minute: 25,
             second: 57
         )
     ) else {
         throw HFSError.operationFailed("Failed to construct expected creation date")
     }
+    let expectedCreated = baseCreatedUTC.addingTimeInterval(
+        -TimeInterval(TimeZone.current.secondsFromGMT(for: baseCreatedUTC))
+    )
     #expect(attributes.created == expectedCreated)
     #expect(attributes.modified == expectedCreated)
 
