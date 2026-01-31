@@ -1,30 +1,22 @@
-# This workflow will build a Swift project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-swift
-
-name: Swift
+name: Swift CI
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-test:
+    runs-on: macos-latest
+    timeout-minutes: 5
 
-    name: Swift ${{ matrix.swift }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        swift: ["6.2"]
     steps:
-      - uses: swift-actions/setup-swift@v3
-        with:
-          swift-version: ${{ matrix.swift }}
-      - name: Get swift version
+      - uses: actions/checkout@v4
+
+      - name: Show Swift version
         run: swift --version
+
       - name: Build
         run: swift build
-      - name: Run tests
+
+      - name: Test
         run: swift test -v
