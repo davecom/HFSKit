@@ -1,0 +1,152 @@
+// hfswrapper.h
+// Simple C wrapper around libhfs for use from Swift or other C code.
+
+#ifndef HFSWRAPPER_H
+#define HFSWRAPPER_H
+
+#include <stdint.h>
+#include <time.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Forward declaration of libhfs types (we don't expose them directly). */
+struct _hfsvol_;
+typedef struct _hfsvol_ hfsvol;
+
+/* Opaque-ish handle to an open HFS image */
+typedef struct HFSImage {
+    hfsvol *vol;
+} HFSImage;
+
+/* Copy modes (for now only AUTO and RAW are implemented; others reserved). */
+#define HFSW_COPY_MODE_AUTO 0
+#define HFSW_COPY_MODE_RAW  1
+
+/* File information returned by hfsw_stat() and hfsw_list_dir() */
+typedef struct {
+    char      name[256];    /* UTF-8-ish name, up to 255 bytes plus NUL */
+    int       isDirectory;  /* nonzero if directory */
+    uint32_t  dataForkSize; /* bytes */
+    uint32_t  rsrcForkSize; /* bytes */
+    char      fileType[5];  /* 4-char type + NUL */
+    char      fileCreator[5]; /* 4-char creator + NUL */
+    uint16_t  flags;        /* Finder flags, HFS_FNDR_* */
+    time_t    created;      /* creation time */
+    time_t    modified;     /* modification time */
+} HFSWFileInfo;
+
+/* Volume information returned by hfsw_volume_info() */
+typedef struct {
+    char      name[256];
+    uint32_t  flags;
+    uint64_t  totalBytes;
+    uint64_t  freeBytes;
+    uint32_t  allocationBlockSize;
+    uint32_t  clumpSize;
+    uint32_t  numberOfFiles;
+    uint32_t  numberOfDirectories;
+    time_t    created;
+    time_t    modified;
+    time_t    backup;
+    uint32_t  blessedFolderId;
+} HFSWVolumeInfo;
+
+/* Callback type used when listing directories. */
+typedef void (*hfsw_list_callback)(
+    const HFSWFileInfo *info,
+    void *context
+);
+
+/* Open a disk image (HFS volume).
+ * path: POSIX path to disk image or block device.
+ * readWrite: 0 = read-only, nonzero = read/write.
+ * Returns NULL on failure.
+ */
+HFSImage *hfsw_open_image(const char *path, int readWrite);
+
+/* Flush + close the image, freeing resources. */
+void hfsw_close_image(HFSImage *image);
+
+/* Get info for a given HFS path (e.g. ":System Folder:Finder").
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_stat(HFSImage *image,
+              const char *hfsPath,
+              HFSWFileInfo *outInfo);
+
+/* List contents of a directory.
+ * hfsDirPath: HFS path to a directory (":" for root).
+ * Calls callback once per entry.
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_list_dir(HFSImage *image,
+                  const char *hfsDirPath,
+                  hfsw_list_callback callback,
+                  void *context);
+
+/* Get volume statistics (total/free bytes, counts, timestamps). */
+int hfsw_volume_info(HFSImage *image,
+                     HFSWVolumeInfo *outInfo);
+
+/* Delete file or (empty) directory at hfsPath.
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_delete(HFSImage *image,
+                const char *hfsPath);
+
+/* Rename file or directory.
+ * hfsOldPath: existing path.
+ * newName: new name only (no path separators).
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_rename(HFSImage *image,
+                const char *hfsOldPath,
+                const char *newName);
+
+/* Create a directory at hfsDirPath (one level).
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_mkdir(HFSImage *image,
+               const char *hfsDirPath);
+
+/* Copy a host file (POSIX path) into the HFS image.
+ * hostPath: POSIX path to existing file.
+ * hfsDestPath: full HFS destination path INCLUDING filename.
+ * mode: HFSW_COPY_MODE_AUTO or HFSW_COPY_MODE_RAW.
+ * Currently both act as RAW data-fork copies.
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_copy_in(HFSImage *image,
+                 const char *hostPath,
+                 const char *hfsDestPath,
+                 int mode);
+
+/* Copy an HFS file to the host filesystem.
+ * hfsPath: full HFS path to file.
+ * hostDestPath: POSIX path to create/overwrite.
+ * mode: HFSW_COPY_MODE_AUTO or HFSW_COPY_MODE_RAW.
+ * Currently both act as RAW data-fork copies.
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_copy_out(HFSImage *image,
+                  const char *hfsPath,
+                  const char *hostDestPath,
+                  int mode);
+
+/* Set Mac file type and creator for an HFS file.
+ * fileType/fileCreator: 4-character codes (e.g. "TEXT", "ttxt").
+ * If shorter, will be padded with spaces; if longer, truncated.
+ * Returns 0 on success, nonzero on failure.
+ */
+int hfsw_set_type_creator(HFSImage *image,
+                          const char *hfsPath,
+                          const char *fileType,
+                          const char *fileCreator);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* HFSWRAPPER_H */
