@@ -14,6 +14,36 @@
 
 /* ---- Internal helpers -------------------------------------------------- */
 
+static const char *
+normalize_error_detail(const char *detail)
+{
+    if (!detail || detail[0] == '\0') {
+        return NULL;
+    }
+    if (strcmp(detail, "no error") == 0) {
+        return NULL;
+    }
+    return detail;
+}
+
+static HFSWError
+hfsw_ok(void)
+{
+    HFSWError err;
+    err.code = 0;
+    err.detail = NULL;
+    return err;
+}
+
+static HFSWError
+hfsw_err(const char *detail)
+{
+    HFSWError err;
+    err.code = errno ? errno : EIO;
+    err.detail = normalize_error_detail(detail);
+    return err;
+}
+
 static void
 fill_file_info(const hfsdirent *e, HFSWFileInfo *out)
 {
@@ -65,6 +95,39 @@ hfsw_open_image(const char *path, int readWrite)
     return img;
 }
 
+HFSWOpenResult
+hfsw_open_image_ex(const char *path, int readWrite)
+{
+    HFSWOpenResult result;
+    result.image = NULL;
+    result.error = hfsw_ok();
+
+    if (!path) {
+        errno = EINVAL;
+        result.error = hfsw_err(NULL);
+        return result;
+    }
+
+    int mode = readWrite ? 1 : 0; /* HFS_MODE_RDWR / HFS_MODE_RDONLY; libhfs uses 0/1 */
+    hfsvol *vol = hfs_mount((char *)path, 0, mode);
+    if (!vol) {
+        result.error = hfsw_err(hfs_error);
+        return result;
+    }
+
+    HFSImage *img = (HFSImage *)malloc(sizeof(HFSImage));
+    if (!img) {
+        hfs_umount(vol);
+        errno = ENOMEM;
+        result.error = hfsw_err(NULL);
+        return result;
+    }
+
+    img->vol = vol;
+    result.image = img;
+    return result;
+}
+
 void
 hfsw_close_image(HFSImage *image)
 {
@@ -77,27 +140,27 @@ hfsw_close_image(HFSImage *image)
     free(image);
 }
 
-int
+HFSWError
 hfsw_stat(HFSImage *image,
           const char *hfsPath,
           HFSWFileInfo *outInfo)
 {
     if (!image || !image->vol || !hfsPath || !outInfo) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     hfsdirent ent;
     if (hfs_stat(image->vol, (char *)hfsPath, &ent) != 0) {
         /* errno set by libhfs */
-        return -1;
+        return hfsw_err(hfs_error);
     }
 
     fill_file_info(&ent, outInfo);
-    return 0;
+    return hfsw_ok();
 }
 
-int
+HFSWError
 hfsw_list_dir(HFSImage *image,
               const char *hfsDirPath,
               hfsw_list_callback callback,
@@ -105,7 +168,7 @@ hfsw_list_dir(HFSImage *image,
 {
     if (!image || !image->vol || !callback) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     const char *path = (hfsDirPath && hfsDirPath[0]) ? hfsDirPath : ":";
@@ -113,7 +176,7 @@ hfsw_list_dir(HFSImage *image,
     hfsdir *dir = hfs_opendir(image->vol, (char *)path);
     if (!dir) {
         /* errno set by libhfs */
-        return -1;
+        return hfsw_err(hfs_error);
     }
 
     hfsdirent ent;
@@ -124,21 +187,21 @@ hfsw_list_dir(HFSImage *image,
     }
 
     hfs_closedir(dir);
-    return 0;
+    return hfsw_ok();
 }
 
-int
+HFSWError
 hfsw_volume_info(HFSImage *image,
                  HFSWVolumeInfo *outInfo)
 {
     if (!image || !image->vol || !outInfo) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     hfsvolent ent;
     if (hfs_vstat(image->vol, &ent) != 0) {
-        return -1;
+        return hfsw_err(hfs_error);
     }
 
     memset(outInfo, 0, sizeof(*outInfo));
@@ -155,54 +218,115 @@ hfsw_volume_info(HFSImage *image,
     outInfo->backup = ent.bkdate;
     outInfo->blessedFolderId = (uint32_t)ent.blessed;
 
-    return 0;
+    return hfsw_ok();
 }
 
-int
+HFSWError
 hfsw_delete(HFSImage *image,
             const char *hfsPath)
 {
     if (!image || !image->vol || !hfsPath) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     hfsdirent ent;
     if (hfs_stat(image->vol, (char *)hfsPath, &ent) != 0) {
-        return -1;
+        return hfsw_err(hfs_error);
     }
 
     if (ent.flags & HFS_ISDIR) {
-        return hfs_rmdir(image->vol, (char *)hfsPath);
+        if (hfs_rmdir(image->vol, (char *)hfsPath) != 0) {
+            return hfsw_err(hfs_error);
+        }
     } else {
-        return hfs_delete(image->vol, (char *)hfsPath);
+        if (hfs_delete(image->vol, (char *)hfsPath) != 0) {
+            return hfsw_err(hfs_error);
+        }
     }
+
+    return hfsw_ok();
 }
 
-int
+HFSWError
 hfsw_rename(HFSImage *image,
             const char *hfsOldPath,
             const char *newName)
 {
     if (!image || !image->vol || !hfsOldPath || !newName) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     /* hfs_rename takes (vol, oldPath, newName) where newName is a bare name. */
-    return hfs_rename(image->vol, (char *)hfsOldPath, (char *)newName);
+    if (hfs_rename(image->vol, (char *)hfsOldPath, (char *)newName) != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
 }
 
-int
+HFSWError
+hfsw_move(HFSImage *image,
+          const char *hfsOldPath,
+          const char *newParentDirectory)
+{
+    if (!image || !image->vol || !hfsOldPath || !newParentDirectory) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    if (newParentDirectory[0] == '\0') {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    const char *baseName = strrchr(hfsOldPath, ':');
+    baseName = baseName ? baseName + 1 : hfsOldPath;
+    if (baseName[0] == '\0') {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    size_t parentLen = strlen(newParentDirectory);
+    int needsSep = (parentLen > 0 && newParentDirectory[parentLen - 1] != ':');
+    size_t destLen = parentLen + (needsSep ? 1 : 0) + strlen(baseName) + 1;
+
+    char *destPath = (char *)malloc(destLen);
+    if (!destPath) {
+        errno = ENOMEM;
+        return hfsw_err(NULL);
+    }
+
+    if (needsSep) {
+        snprintf(destPath, destLen, "%s:%s", newParentDirectory, baseName);
+    } else {
+        snprintf(destPath, destLen, "%s%s", newParentDirectory, baseName);
+    }
+
+    int result = hfs_rename(image->vol, (char *)hfsOldPath, destPath);
+    free(destPath);
+    if (result != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
+}
+
+HFSWError
 hfsw_mkdir(HFSImage *image,
            const char *hfsDirPath)
 {
     if (!image || !image->vol || !hfsDirPath) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
-    return hfs_mkdir(image->vol, (char *)hfsDirPath);
+    if (hfs_mkdir(image->vol, (char *)hfsDirPath) != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
 }
 
 /* Helper: tidy 4-char Mac type/creator into char[5]. */
@@ -222,7 +346,7 @@ normalize_fourcc(const char *in, char out[5])
     out[4] = '\0';
 }
 
-int
+HFSWError
 hfsw_copy_in(HFSImage *image,
              const char *hostPath,
              const char *hfsDestPath,
@@ -230,14 +354,18 @@ hfsw_copy_in(HFSImage *image,
 {
     if (!image || !image->vol || !hostPath || !hfsDestPath) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
     (void)mode;
 
-    return cpi_raw(hostPath, image->vol, hfsDestPath);
+    if (cpi_raw(hostPath, image->vol, hfsDestPath) != 0) {
+        return hfsw_err(cpi_error);
+    }
+
+    return hfsw_ok();
 }
 
-int
+HFSWError
 hfsw_copy_out(HFSImage *image,
               const char *hfsPath,
               const char *hostDestPath,
@@ -247,18 +375,18 @@ hfsw_copy_out(HFSImage *image,
 
     if (!image || !image->vol || !hfsPath || !hostDestPath) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     hfsfile *hf = hfs_open(image->vol, (char *)hfsPath);
     if (!hf) {
-        return -1;
+        return hfsw_err(hfs_error);
     }
 
     FILE *fp = fopen(hostDestPath, "wb");
     if (!fp) {
         hfs_close(hf);
-        return -1;
+        return hfsw_err(NULL);
     }
 
     unsigned char buffer[4096];
@@ -277,6 +405,7 @@ hfsw_copy_out(HFSImage *image,
 
         size_t nwritten = fwrite(buffer, 1, (size_t)nread, fp);
         if (nwritten != (size_t)nread) {
+            errno = EIO;
             result = -1;
             break;
         }
@@ -284,10 +413,14 @@ hfsw_copy_out(HFSImage *image,
 
     hfs_close(hf);
     fclose(fp);
-    return result;
+    if (result != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
 }
 
-int
+HFSWError
 hfsw_set_type_creator(HFSImage *image,
                       const char *hfsPath,
                       const char *fileType,
@@ -295,16 +428,20 @@ hfsw_set_type_creator(HFSImage *image,
 {
     if (!image || !image->vol || !hfsPath) {
         errno = EINVAL;
-        return -1;
+        return hfsw_err(NULL);
     }
 
     hfsdirent ent;
     if (hfs_stat(image->vol, (char *)hfsPath, &ent) != 0) {
-        return -1;
+        return hfsw_err(hfs_error);
     }
 
     normalize_fourcc(fileType,   ent.u.file.type);
     normalize_fourcc(fileCreator, ent.u.file.creator);
 
-    return hfs_setattr(image->vol, (char *)hfsPath, &ent);
+    if (hfs_setattr(image->vol, (char *)hfsPath, &ent) != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
 }

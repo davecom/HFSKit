@@ -19,13 +19,59 @@
 //
 
 import Foundation
+import Darwin
 import HFSCore   // This is the Clang module for your C target (containing hfswrapper.h/c)
 
 // MARK: - Errors
 
 public enum HFSError: Error {
-    case openFailed
-    case operationFailed(String? = nil)
+    case openFailed(errno: Int32, detail: String?)
+    case operationFailed(operation: String,
+                         errno: Int32,
+                         detail: String?,
+                         path: String?,
+                         destination: String?)
+    case invalidArgument(String)
+    case volumeClosed
+    case pathExistsNotDirectory(String)
+    case copyInSourceNotDirectory(String)
+}
+
+public extension HFSError {
+    var userMessage: String {
+        switch self {
+        case let .openFailed(errno, detail):
+            return formatMessage(
+                prefix: "Failed to open volume",
+                errno: errno,
+                detail: detail,
+                path: nil,
+                destination: nil
+            )
+        case let .operationFailed(operation, errno, detail, path, destination):
+            return formatMessage(
+                prefix: "\(operation.capitalized) failed",
+                errno: errno,
+                detail: detail,
+                path: path,
+                destination: destination
+            )
+        case let .invalidArgument(message):
+            return message
+        case .volumeClosed:
+            return "The volume is closed."
+        case let .pathExistsNotDirectory(path):
+            return "The path exists but is not a directory: \(path)"
+        case let .copyInSourceNotDirectory(path):
+            return "The source is not a directory: \(path)"
+        }
+    }
+}
+
+extension HFSError: LocalizedError {
+    public var errorDescription: String? {
+        return userMessage
+    }
 }
 
 // MARK: - File info
@@ -83,8 +129,12 @@ public final class HFSVolume {
         let cPath = path.path.cString(using: .utf8)!
         let rw = writable ? 1 : 0
 
-        guard let h = hfsw_open_image(cPath, Int32(rw)) else {
-            throw HFSError.openFailed
+        let result = hfsw_open_image_ex(cPath, Int32(rw))
+        guard let h = result.image else {
+            let detail = result.error.detail != nil
+                ? String(cString: result.error.detail)
+                : nil
+            throw HFSError.openFailed(errno: result.error.code, detail: detail)
         }
         self.handle = h
     }
@@ -102,9 +152,27 @@ public final class HFSVolume {
 
     private func requireHandle() throws -> UnsafeMutablePointer<HFSImage> {
         guard let h = handle else {
-            throw HFSError.operationFailed("Volume is closed")
+            throw HFSError.volumeClosed
         }
         return h
+    }
+
+    private func throwIfError(_ error: HFSWError,
+                              operation: String,
+                              path: String? = nil,
+                              destination: String? = nil) throws
+    {
+        guard error.code != 0 else { return }
+        let detail = error.detail != nil
+            ? String(cString: error.detail)
+            : nil
+        throw HFSError.operationFailed(
+            operation: operation,
+            errno: error.code,
+            detail: detail,
+            path: path,
+            destination: destination
+        )
     }
 
     // MARK: - Stat
@@ -113,13 +181,10 @@ public final class HFSVolume {
         let h = try requireHandle()
 
         var cInfo = HFSWFileInfo()
-        let status = path.withCString { cPath in
+        let error = path.withCString { cPath in
             hfsw_stat(h, cPath, &cInfo)
         }
-
-        guard status == 0 else {
-            throw HFSError.operationFailed("stat failed for \(path)")
-        }
+        try throwIfError(error, operation: "stat", path: path)
 
         return HFSFileInfo(from: cInfo, path: path)
     }
@@ -160,9 +225,7 @@ public final class HFSVolume {
             hfsw_list_dir(h, cPath, callback, ctxPtr)
         }
 
-        guard status == 0 else {
-            throw HFSError.operationFailed("list failed for \(hfsPath)")
-        }
+        try throwIfError(status, operation: "list", path: hfsPath)
 
         return context.items
     }
@@ -173,10 +236,8 @@ public final class HFSVolume {
         let h = try requireHandle()
 
         var cInfo = HFSWVolumeInfo()
-        let status = hfsw_volume_info(h, &cInfo)
-        guard status == 0 else {
-            throw HFSError.operationFailed("volume info failed")
-        }
+        let error = hfsw_volume_info(h, &cInfo)
+        try throwIfError(error, operation: "volume info", path: nil)
 
         return HFSVolumeInfo(from: cInfo)
     }
@@ -185,12 +246,10 @@ public final class HFSVolume {
 
     public func delete(path: String) throws {
         let h = try requireHandle()
-        let status = path.withCString { cPath in
+        let error = path.withCString { cPath in
             hfsw_delete(h, cPath)
         }
-        guard status == 0 else {
-            throw HFSError.operationFailed("delete failed for \(path)")
-        }
+        try throwIfError(error, operation: "delete", path: path)
     }
 
     public func delete(_ info: HFSFileInfo) throws {
@@ -203,28 +262,38 @@ public final class HFSVolume {
 
     public func rename(path: String, to newName: String) throws {
         let h = try requireHandle()
-        let status = path.withCString { cOld in
+        let error = path.withCString { cOld in
             newName.withCString { cNew in
                 hfsw_rename(h, cOld, cNew)
             }
         }
-        guard status == 0 else {
-            throw HFSError.operationFailed("rename failed for \(path) -> \(newName)")
-        }
+        try throwIfError(error, operation: "rename", path: path, destination: newName)
     }
 
     public func rename(_ info: HFSFileInfo, to newName: String) throws {
         try rename(path: info.path, to: newName)
     }
 
+    public func move(path: String, toParentDirectory: String) throws {
+        let h = try requireHandle()
+        let error = path.withCString { cOld in
+            toParentDirectory.withCString { cParent in
+                hfsw_move(h, cOld, cParent)
+            }
+        }
+        try throwIfError(error, operation: "move", path: path, destination: toParentDirectory)
+    }
+
+    public func move(_ info: HFSFileInfo, toParentDirectory: String) throws {
+        try move(path: info.path, toParentDirectory: toParentDirectory)
+    }
+
     public func makeDirectory(path: String) throws {
         let h = try requireHandle()
-        let status = path.withCString { cPath in
+        let error = path.withCString { cPath in
             hfsw_mkdir(h, cPath)
         }
-        guard status == 0 else {
-            throw HFSError.operationFailed("mkdir failed for \(path)")
-        }
+        try throwIfError(error, operation: "mkdir", path: path)
     }
 
     public func makeDirectory(_ info: HFSFileInfo) throws {
@@ -244,15 +313,18 @@ public final class HFSVolume {
     {
         let h = try requireHandle()
 
-        let status = hostPath.path.withCString { cHost in
+        let error = hostPath.path.withCString { cHost in
             hfsPath.withCString { cHFS in
                 hfsw_copy_in(h, cHost, cHFS, mode.rawValue)
             }
         }
 
-        guard status == 0 else {
-            throw HFSError.operationFailed("copyIn failed for \(hostPath.path) -> \(hfsPath)")
-        }
+        try throwIfError(
+            error,
+            operation: "copy in",
+            path: hfsPath,
+            destination: hostPath.path
+        )
     }
 
     public func copyIn(hostPath: URL,
@@ -268,15 +340,18 @@ public final class HFSVolume {
     {
         let h = try requireHandle()
 
-        let status = hfsPath.withCString { cHFS in
+        let error = hfsPath.withCString { cHFS in
             hostPath.path.withCString { cHost in
                 hfsw_copy_out(h, cHFS, cHost, mode.rawValue)
             }
         }
 
-        guard status == 0 else {
-            throw HFSError.operationFailed("copyOut failed for \(hfsPath) -> \(hostPath.path)")
-        }
+        try throwIfError(
+            error,
+            operation: "copy out",
+            path: hfsPath,
+            destination: hostPath.path
+        )
     }
 
     public func copyOut(hfsPath info: HFSFileInfo,
@@ -297,7 +372,7 @@ public final class HFSVolume {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: hostDirectory.path, isDirectory: &isDir), isDir.boolValue else {
-            throw HFSError.operationFailed("copyInDirectory source is not a directory: \(hostDirectory.path)")
+            throw HFSError.copyInSourceNotDirectory(hostDirectory.path)
         }
 
         try ensureDirectoryExists(at: hfsPath)
@@ -349,7 +424,7 @@ public final class HFSVolume {
     {
         let h = try requireHandle()
 
-        let status = path.withCString { cPath in
+        let error = path.withCString { cPath in
             fileType.withCString { cType in
                 fileCreator.withCString { cCreator in
                     hfsw_set_type_creator(h, cPath, cType, cCreator)
@@ -357,9 +432,7 @@ public final class HFSVolume {
             }
         }
 
-        guard status == 0 else {
-            throw HFSError.operationFailed("setTypeCreator failed for \(path)")
-        }
+        try throwIfError(error, operation: "set type/creator", path: path)
     }
 
     public func setTypeCreator(path info: HFSFileInfo,
@@ -394,7 +467,7 @@ public final class HFSVolume {
         do {
             let info = try stat(path: hfsPath)
             if !info.isDirectory {
-                throw HFSError.operationFailed("Path exists and is not a directory: \(hfsPath)")
+                throw HFSError.pathExistsNotDirectory(hfsPath)
             }
         } catch {
             try makeDirectory(path: hfsPath)
@@ -457,4 +530,30 @@ private func joinHFSPath(_ base: String, _ name: String) -> String {
     if base == ":" { return ":\(name)" }
     if base.hasSuffix(":") { return base + name }
     return base + ":\(name)"
+}
+
+private func formatMessage(prefix: String,
+                           errno: Int32,
+                           detail: String?,
+                           path: String?,
+                           destination: String?) -> String
+{
+    var parts: [String] = [prefix]
+    if let path {
+        parts.append(path)
+    }
+    if let destination {
+        parts.append("->")
+        parts.append(destination)
+    }
+    let posixMessage = errno == 0 ? nil : String(cString: strerror(errno))
+    if let posixMessage, !posixMessage.isEmpty {
+        parts.append("-")
+        parts.append(posixMessage)
+    }
+    if let detail, !detail.isEmpty {
+        parts.append("-")
+        parts.append(detail)
+    }
+    return parts.joined(separator: " ")
 }

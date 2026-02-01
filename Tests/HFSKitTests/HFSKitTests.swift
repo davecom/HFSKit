@@ -24,7 +24,7 @@ import Testing
             second: 57
         )
     ) else {
-        throw HFSError.operationFailed("Failed to construct expected creation date")
+        throw HFSError.invalidArgument("Failed to construct expected creation date")
     }
     let expectedCreated = baseCreatedUTC.addingTimeInterval(
         -TimeInterval(TimeZone.current.secondsFromGMT(for: baseCreatedUTC))
@@ -93,7 +93,7 @@ import Testing
     if let info = try volume.list(directory: ":").first(where: { $0.name == "mountain" }) {
         try volume.delete(info)
     } else {
-        throw HFSError.operationFailed("Expected mountain in root listing")
+        throw HFSError.invalidArgument("Expected mountain in root listing")
     }
 
     let entriesAfterDelete = try volume.list(directory: ":")
@@ -129,6 +129,42 @@ import Testing
     let entries = try volume.list(directory: ":")
     #expect(entries.contains { $0.name == "mountain2" })
     #expect(!entries.contains { $0.name == "mountain" })
+}
+
+@Test func moveFileToDirectory() async throws {
+    let mountainURL = try mountainURL()
+    let volume = try makeWritableVolume()
+
+    try volume.copyIn(hostPath: mountainURL, toHFSPath: "mountain")
+    try volume.makeDirectory(path: ":Folder")
+    try volume.move(path: "mountain", toParentDirectory: ":Folder")
+
+    let rootEntries = try volume.list(directory: ":")
+    #expect(!rootEntries.contains { $0.name == "mountain" })
+
+    let folderEntries = try volume.list(directory: ":Folder")
+    #expect(folderEntries.contains { $0.name == "mountain" && !$0.isDirectory })
+}
+
+@Test func moveDirectoryToDirectory() async throws {
+    let mountainURL = try mountainURL()
+    let volume = try makeWritableVolume()
+
+    try volume.makeDirectory(path: ":FolderA")
+    try volume.makeDirectory(path: ":FolderB")
+    try volume.copyIn(hostPath: mountainURL, toHFSPath: ":FolderA:mountain")
+
+    let folderInfo = try volume.attributes(of: ":FolderA")
+    try volume.move(folderInfo, toParentDirectory: ":FolderB")
+
+    let rootEntries = try volume.list(directory: ":")
+    #expect(!rootEntries.contains { $0.name == "FolderA" })
+
+    let folderBEntries = try volume.list(directory: ":FolderB")
+    #expect(folderBEntries.contains { $0.name == "FolderA" && $0.isDirectory })
+
+    let movedEntries = try volume.list(directory: ":FolderB:FolderA")
+    #expect(movedEntries.contains { $0.name == "mountain" && !$0.isDirectory })
 }
 
 @Test func nestedPathOperations() async throws {
@@ -359,28 +395,28 @@ import Testing
 
 private func testImageURL() throws -> URL {
     guard let imgURL = Bundle.module.url(forResource: "test", withExtension: "img") else {
-        throw HFSError.operationFailed("Missing test image resource")
+        throw HFSError.invalidArgument("Missing test image resource")
     }
     return imgURL
 }
 
 private func mountainURL() throws -> URL {
     guard let url = Bundle.module.url(forResource: "mountain", withExtension: nil) else {
-        throw HFSError.operationFailed("Missing mountain resource")
+        throw HFSError.invalidArgument("Missing mountain resource")
     }
     return url
 }
 
 private func sunglassesURL() throws -> URL {
     guard let url = Bundle.module.url(forResource: "sunglasses", withExtension: "bin") else {
-        throw HFSError.operationFailed("Missing sunglasses resource")
+        throw HFSError.invalidArgument("Missing sunglasses resource")
     }
     return url
 }
 
 private func test2ImageURL() throws -> URL {
     guard let imgURL = Bundle.module.url(forResource: "test2", withExtension: "img") else {
-        throw HFSError.operationFailed("Missing test2 image resource")
+        throw HFSError.invalidArgument("Missing test2 image resource")
     }
     return imgURL
 }
