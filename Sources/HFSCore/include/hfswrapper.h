@@ -26,6 +26,22 @@ typedef struct {
     const char *detail;       /* libhfs/hfsutils detail or NULL */
 } HFSWError;
 
+typedef struct {
+    int index;                /* partition map entry number (1-based) */
+    char name[33];            /* partition name */
+    char type[33];            /* partition type */
+    uint32_t startBlock;      /* physical start block */
+    uint32_t blockCount;      /* physical block count */
+    uint32_t dataStart;       /* logical data start */
+    uint32_t dataCount;       /* logical data block count */
+    int isHFS;                /* nonzero if Apple_HFS */
+} HFSWPartitionInfo;
+
+typedef void (*hfsw_partition_callback)(
+    const HFSWPartitionInfo *info,
+    void *context
+);
+
 /* Result for hfsw_open_image_ex. */
 typedef struct {
     HFSImage *image;          /* NULL on failure */
@@ -79,10 +95,18 @@ typedef void (*hfsw_list_callback)(
 HFSImage *hfsw_open_image(const char *path, int readWrite);
 
 /* Open a disk image and return error information if it fails. */
-HFSWOpenResult hfsw_open_image_ex(const char *path, int readWrite);
+HFSWOpenResult hfsw_open_image_ex(const char *path, int readWrite, int partno);
 
 /* Flush + close the image, freeing resources. */
 void hfsw_close_image(HFSImage *image);
+
+/* List partitions in a disk image.
+ * Sets outHasPartitionMap to 1 if a map is present.
+ */
+HFSWError hfsw_list_partitions(const char *path,
+                               hfsw_partition_callback callback,
+                               void *context,
+                               int *outHasPartitionMap);
 
 /* Get info for a given HFS path (e.g. ":System Folder:Finder"). */
 HFSWError hfsw_stat(HFSImage *image,

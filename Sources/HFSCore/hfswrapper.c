@@ -9,7 +9,9 @@
 #include <errno.h>
 
 /* libhfs header from hfsutils (must be in your include path). */
-#include "hfs.h"
+#include "libhfs.h"
+#include "low.h"
+#include "volume.h"
 #include "copyin.h"
 
 /* ---- Internal helpers -------------------------------------------------- */
@@ -96,7 +98,7 @@ hfsw_open_image(const char *path, int readWrite)
 }
 
 HFSWOpenResult
-hfsw_open_image_ex(const char *path, int readWrite)
+hfsw_open_image_ex(const char *path, int readWrite, int partno)
 {
     HFSWOpenResult result;
     result.image = NULL;
@@ -108,8 +110,14 @@ hfsw_open_image_ex(const char *path, int readWrite)
         return result;
     }
 
+    if (partno < 0) {
+        errno = EINVAL;
+        result.error = hfsw_err(NULL);
+        return result;
+    }
+
     int mode = readWrite ? 1 : 0; /* HFS_MODE_RDWR / HFS_MODE_RDONLY; libhfs uses 0/1 */
-    hfsvol *vol = hfs_mount((char *)path, 0, mode);
+    hfsvol *vol = hfs_mount((char *)path, partno, mode);
     if (!vol) {
         result.error = hfsw_err(hfs_error);
         return result;
@@ -138,6 +146,66 @@ hfsw_close_image(HFSImage *image)
         image->vol = NULL;
     }
     free(image);
+}
+
+HFSWError
+hfsw_list_partitions(const char *path,
+                     hfsw_partition_callback callback,
+                     void *context,
+                     int *outHasPartitionMap)
+{
+    if (!path || !callback) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    if (outHasPartitionMap) {
+        *outHasPartitionMap = 0;
+    }
+
+    hfsvol vol;
+    v_init(&vol, HFS_OPT_NOCACHE);
+
+    if (v_open(&vol, path, HFS_MODE_RDONLY) == -1) {
+        return hfsw_err(hfs_error);
+    }
+
+    Partition map;
+    if (l_getpmentry(&vol, &map, 1) == -1 ||
+        map.pmSig != HFS_PM_SIGWORD) {
+        v_close(&vol);
+        return hfsw_ok();
+    }
+
+    if (outHasPartitionMap) {
+        *outHasPartitionMap = 1;
+    }
+
+    unsigned long total = (unsigned long)map.pmMapBlkCnt;
+    for (unsigned long bnum = 1; bnum <= total; ++bnum) {
+        if (l_getpmentry(&vol, &map, bnum) == -1) {
+            v_close(&vol);
+            return hfsw_err(hfs_error);
+        }
+
+        HFSWPartitionInfo info;
+        memset(&info, 0, sizeof(info));
+        info.index = (int)bnum;
+        strncpy(info.name, (const char *)map.pmPartName, sizeof(info.name) - 1);
+        strncpy(info.type, (const char *)map.pmParType, sizeof(info.type) - 1);
+        info.startBlock = (uint32_t)map.pmPyPartStart;
+        info.blockCount = (uint32_t)map.pmPartBlkCnt;
+        info.dataStart = (uint32_t)map.pmLgDataStart;
+        info.dataCount = (uint32_t)map.pmDataCnt;
+        info.isHFS = (strcmp(info.type, "Apple_HFS") == 0) ? 1 : 0;
+        callback(&info, context);
+    }
+
+    if (v_close(&vol) == -1) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
 }
 
 HFSWError

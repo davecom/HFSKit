@@ -35,6 +35,7 @@ public enum HFSError: Error {
     case volumeClosed
     case pathExistsNotDirectory(String)
     case copyInSourceNotDirectory(String)
+    case noHFSPPartitions(String)
 }
 
 public extension HFSError {
@@ -64,6 +65,8 @@ public extension HFSError {
             return "The path exists but is not a directory: \(path)"
         case let .copyInSourceNotDirectory(path):
             return "The source is not a directory: \(path)"
+        case let .noHFSPPartitions(path):
+            return "No HFS partitions were found in \(path)."
         }
     }
 }
@@ -116,6 +119,21 @@ public struct HFSVolumeInfo: CustomStringConvertible {
     }
 }
 
+public struct HFSPartitionInfo: CustomStringConvertible {
+    public let index: Int
+    public let name: String
+    public let type: String
+    public let startBlock: UInt32
+    public let blockCount: UInt32
+    public let dataStart: UInt32
+    public let dataCount: UInt32
+    public let isHFS: Bool
+
+    public var description: String {
+        return "HFSPartitionInfo(index: \(index), name: \(name), type: \(type), hfs: \(isHFS))"
+    }
+}
+
 // MARK: - Volume
 
 public final class HFSVolume {
@@ -125,11 +143,15 @@ public final class HFSVolume {
         return handle == nil
     }
 
-    public init(path: URL, writable: Bool) throws {
+    public init(path: URL, writable: Bool, partition: Int? = nil) throws {
         let cPath = path.path.cString(using: .utf8)!
         let rw = writable ? 1 : 0
+        let partno = try HFSVolume.resolvePartitionNumber(
+            at: path,
+            explicitPartition: partition
+        )
 
-        let result = hfsw_open_image_ex(cPath, Int32(rw))
+        let result = hfsw_open_image_ex(cPath, Int32(rw), Int32(partno))
         guard let h = result.image else {
             let detail = result.error.detail != nil
                 ? String(cString: result.error.detail)
@@ -150,11 +172,79 @@ public final class HFSVolume {
         }
     }
 
+    public static func listPartitions(path: URL) throws -> [HFSPartitionInfo] {
+        let context = PartitionListContext()
+        let ctxPtr = Unmanaged.passUnretained(context).toOpaque()
+
+        let callback: hfsw_partition_callback = { infoPtr, rawCtx in
+            guard let infoPtr = infoPtr,
+                  let rawCtx = rawCtx else { return }
+
+            let ctx = Unmanaged<PartitionListContext>
+                .fromOpaque(rawCtx)
+                .takeUnretainedValue()
+
+            let cInfo = infoPtr.pointee
+            let info = HFSPartitionInfo(
+                index: Int(cInfo.index),
+                name: stringFromFixedArray(cInfo.name),
+                type: stringFromFixedArray(cInfo.type),
+                startBlock: cInfo.startBlock,
+                blockCount: cInfo.blockCount,
+                dataStart: cInfo.dataStart,
+                dataCount: cInfo.dataCount,
+                isHFS: cInfo.isHFS != 0
+            )
+            ctx.items.append(info)
+        }
+
+        var hasMap: Int32 = 0
+        let error = path.path.withCString { cPath in
+            hfsw_list_partitions(cPath, callback, ctxPtr, &hasMap)
+        }
+        if error.code != 0 {
+            let detail = error.detail != nil ? String(cString: error.detail) : nil
+            throw HFSError.operationFailed(
+                operation: "list partitions",
+                errno: error.code,
+                detail: detail,
+                path: path.path,
+                destination: nil
+            )
+        }
+        context.hasPartitionMap = hasMap != 0
+        return context.items
+    }
+
     private func requireHandle() throws -> UnsafeMutablePointer<HFSImage> {
         guard let h = handle else {
             throw HFSError.volumeClosed
         }
         return h
+    }
+
+    private final class PartitionListContext {
+        var items: [HFSPartitionInfo] = []
+        var hasPartitionMap: Bool = false
+    }
+
+    private static func resolvePartitionNumber(at path: URL,
+                                               explicitPartition: Int?) throws -> Int
+    {
+        if let explicitPartition {
+            return explicitPartition
+        }
+
+        let partitions = try listPartitions(path: path)
+        if partitions.isEmpty {
+            return 0
+        }
+
+        if let firstHFS = partitions.first(where: { $0.isHFS }) {
+            return firstHFS.index
+        }
+
+        throw HFSError.noHFSPPartitions(path.path)
     }
 
     private func throwIfError(_ error: HFSWError,
