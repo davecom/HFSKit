@@ -102,6 +102,10 @@ HFSWOpenResult hfsw_open_image_ex(const char *path, int readWrite, int partno);
 /* Flush + close the image, freeing resources. */
 void hfsw_close_image(HFSImage *image);
 
+/* Enable/disable libhfs diagnostic logging (e.g. BLOCK: READ/WRITE). */
+void hfsw_set_debug_logging(int enabled);
+int hfsw_get_debug_logging(void);
+
 /* List partitions in a disk image.
  * Sets outHasPartitionMap to 1 if a map is present.
  */

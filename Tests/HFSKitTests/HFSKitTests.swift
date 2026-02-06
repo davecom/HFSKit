@@ -460,6 +460,13 @@ private func test2ImageURL() throws -> URL {
     return imgURL
 }
 
+private func multiImageURL() throws -> URL {
+    guard let imgURL = Bundle.module.url(forResource: "multi", withExtension: "hda") else {
+        throw HFSError.invalidArgument("Missing multi image resource")
+    }
+    return imgURL
+}
+
 private func makeTempDir() throws -> URL {
     let tempDir = FileManager.default.temporaryDirectory
         .appendingPathComponent("HFSKitTests-\(UUID())", isDirectory: true)

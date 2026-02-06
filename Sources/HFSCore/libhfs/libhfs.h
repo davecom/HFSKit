@@ -25,6 +25,7 @@
 # include "apple.h"
 
 extern int errno;
+extern int hfs_debug_logging_enabled;
 
 # define ERROR(code, str)  \
     do { hfs_error = (str), errno = (code); goto fail; } while (0)

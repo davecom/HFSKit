@@ -88,15 +88,17 @@ fail:
 }
 
 # ifdef DEBUG
+# define DEBUG_LOG(...)  \
+    do { if (hfs_debug_logging_enabled) fprintf(stderr, __VA_ARGS__); } while (0)
 /*
  * NAME:	block->showstats()
  * DESCRIPTION:	output cache hit/miss ratio
  */
 void b_showstats(const bcache *cache)
 {
-  fprintf(stderr, "BLOCK: CACHE vol 0x%lx \"%s\" hit/miss ratio = %.3f\n",
-	  (unsigned long) cache->vol, cache->vol->mdb.drVN,
-	  (float) cache->hits / (float) cache->misses);
+  DEBUG_LOG("BLOCK: CACHE vol 0x%lx \"%s\" hit/miss ratio = %.3f\n",
+	    (unsigned long) cache->vol, cache->vol->mdb.drVN,
+	    (float) cache->hits / (float) cache->misses);
 }
 
 /*
@@ -108,23 +110,23 @@ void b_dumpcache(const bcache *cache)
   const bucket *b;
   int i;
 
-  fprintf(stderr, "BLOCK CACHE DUMP:\n");
+  DEBUG_LOG("BLOCK CACHE DUMP:\n");
 
   for (i = 0, b = cache->tail->cnext; i < HFS_CACHESZ; ++i, b = b->cnext)
     {
       if (INUSE(b))
 	{
-	  fprintf(stderr, "\t %lu", b->bnum);
+	  DEBUG_LOG("\t %lu", b->bnum);
 	  if (DIRTY(b))
-	    fprintf(stderr, "*");
+	    DEBUG_LOG("*");
 
-	  fprintf(stderr, ":%u", b->count);
+	  DEBUG_LOG(":%u", b->count);
 	}
     }
 
-  fprintf(stderr, "\n");
+  DEBUG_LOG("\n");
 
-  fprintf(stderr, "BLOCK HASH DUMP:\n");
+  DEBUG_LOG("BLOCK HASH DUMP:\n");
 
   for (i = 0; i < HFS_HASHSZ; ++i)
     {
@@ -133,22 +135,22 @@ void b_dumpcache(const bcache *cache)
       for (b = cache->hash[i]; b; b = b->hnext)
 	{
 	  if (! seen)
-	    fprintf(stderr, "  %d:", i);
+	    DEBUG_LOG("  %d:", i);
 
 	  if (INUSE(b))
 	    {
-	      fprintf(stderr, " %lu", b->bnum);
+	      DEBUG_LOG(" %lu", b->bnum);
 	      if (DIRTY(b))
-		fprintf(stderr, "*");
+		DEBUG_LOG("*");
 
-	      fprintf(stderr, ":%u", b->count);
+	      DEBUG_LOG(":%u", b->count);
 	    }
 
 	  seen = 1;
 	}
 
       if (seen)
-	fprintf(stderr, "\n");
+	DEBUG_LOG("\n");
     }
 }
 # endif
@@ -399,9 +401,9 @@ int reuse(bcache *cache, bucket *b, unsigned long bnum)
 
 # ifdef DEBUG
   if (INUSE(b))
-    fprintf(stderr, "BLOCK: CACHE reusing bucket containing "
-	    "vol 0x%lx block %lu:%u\n",
-	    (unsigned long) cache->vol, b->bnum, b->count);
+    DEBUG_LOG("BLOCK: CACHE reusing bucket containing "
+	      "vol 0x%lx block %lu:%u\n",
+	      (unsigned long) cache->vol, b->bnum, b->count);
 # endif
 
   if (INUSE(b) && DIRTY(b))
@@ -581,12 +583,12 @@ int b_readpb(hfsvol *vol, unsigned long bnum, block *bp, unsigned int blen)
   unsigned long nblocks;
 
 # ifdef DEBUG
-  fprintf(stderr, "BLOCK: READ vol 0x%lx block %lu",
-	  (unsigned long) vol, bnum);
+  DEBUG_LOG("BLOCK: READ vol 0x%lx block %lu",
+	    (unsigned long) vol, bnum);
   if (blen > 1)
-    fprintf(stderr, "+%u[..%lu]\n", blen - 1, bnum + blen - 1);
+    DEBUG_LOG("+%u[..%lu]\n", blen - 1, bnum + blen - 1);
   else
-    fprintf(stderr, "\n");
+    DEBUG_LOG("\n");
 # endif
 
   nblocks = os_seek(&vol->priv, bnum);
@@ -619,12 +621,12 @@ int b_writepb(hfsvol *vol, unsigned long bnum, const block *bp,
   unsigned long nblocks;
 
 # ifdef DEBUG
-  fprintf(stderr, "BLOCK: WRITE vol 0x%lx block %lu",
-	  (unsigned long) vol, bnum);
+  DEBUG_LOG("BLOCK: WRITE vol 0x%lx block %lu",
+	    (unsigned long) vol, bnum);
   if (blen > 1)
-    fprintf(stderr, "+%u[..%lu]\n", blen - 1, bnum + blen - 1);
+    DEBUG_LOG("+%u[..%lu]\n", blen - 1, bnum + blen - 1);
   else
-    fprintf(stderr, "\n");
+    DEBUG_LOG("\n");
 # endif
 
   nblocks = os_seek(&vol->priv, bnum);

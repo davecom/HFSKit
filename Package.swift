@@ -37,7 +37,8 @@ let package = Package(
                     .copy("Resources/test.img"),
                     .copy("Resources/test2.img"),
                     .copy("Resources/mountain"),
-                    .copy("Resources/sunglasses.bin")
+                    .copy("Resources/sunglasses.bin"),
+                    .copy("Resources/multi.hda")
                 ]
         )
     ]

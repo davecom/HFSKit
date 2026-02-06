@@ -16,6 +16,8 @@
 
 /* ---- Internal helpers -------------------------------------------------- */
 
+int hfs_debug_logging_enabled = 1;
+
 static const char *
 normalize_error_detail(const char *detail)
 {
@@ -219,6 +221,18 @@ hfsw_close_image(HFSImage *image)
         image->vol = NULL;
     }
     free(image);
+}
+
+void
+hfsw_set_debug_logging(int enabled)
+{
+    hfs_debug_logging_enabled = enabled ? 1 : 0;
+}
+
+int
+hfsw_get_debug_logging(void)
+{
+    return hfs_debug_logging_enabled;
 }
 
 HFSWError

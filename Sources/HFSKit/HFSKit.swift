@@ -22,6 +22,17 @@ import Foundation
 import Darwin
 import HFSCore   // This is the Clang module for your C target (containing hfswrapper.h/c)
 
+public enum HFSKitSettings {
+    public static var verboseLoggingEnabled: Bool {
+        get {
+            hfsw_get_debug_logging() != 0
+        }
+        set {
+            hfsw_set_debug_logging(newValue ? 1 : 0)
+        }
+    }
+}
+
 // MARK: - Errors
 
 public enum HFSError: Error {

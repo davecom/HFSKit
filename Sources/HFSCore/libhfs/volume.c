@@ -1050,15 +1050,17 @@ int v_scavenge(hfsvol *vol)
   unsigned long lastcnid = 15;
 
 # ifdef DEBUG
-  fprintf(stderr, "VOL: \"%s\" not cleanly unmounted\n",
-	  vol->mdb.drVN);
+  if (hfs_debug_logging_enabled)
+    fprintf(stderr, "VOL: \"%s\" not cleanly unmounted\n",
+	    vol->mdb.drVN);
 # endif
 
   if (vol->flags & HFS_VOL_READONLY)
     goto done;
 
 # ifdef DEBUG
-  fprintf(stderr, "VOL: scavenging...\n");
+  if (hfs_debug_logging_enabled)
+    fprintf(stderr, "VOL: scavenging...\n");
 # endif
 
   /* reset MDB by marking it dirty again */
@@ -1167,8 +1169,9 @@ int v_scavenge(hfsvol *vol)
   if (vol->mdb.drFreeBks != blks)
     {
 # ifdef DEBUG
-      fprintf(stderr, "VOL: updating free blocks from %u to %u\n",
-	      vol->mdb.drFreeBks, blks);
+      if (hfs_debug_logging_enabled)
+	fprintf(stderr, "VOL: updating free blocks from %u to %u\n",
+		vol->mdb.drFreeBks, blks);
 # endif
 
       vol->mdb.drFreeBks = blks;
@@ -1180,8 +1183,9 @@ int v_scavenge(hfsvol *vol)
   if ((unsigned long) vol->mdb.drNxtCNID <= lastcnid)
     {
 # ifdef DEBUG
-      fprintf(stderr, "VOL: updating next CNID from %lu to %lu\n",
-	      vol->mdb.drNxtCNID, lastcnid + 1);
+      if (hfs_debug_logging_enabled)
+	fprintf(stderr, "VOL: updating next CNID from %lu to %lu\n",
+		vol->mdb.drNxtCNID, lastcnid + 1);
 # endif
 
       vol->mdb.drNxtCNID = lastcnid + 1;
@@ -1189,7 +1193,8 @@ int v_scavenge(hfsvol *vol)
     }
 
 # ifdef DEBUG
-  fprintf(stderr, "VOL: scavenging complete\n");
+  if (hfs_debug_logging_enabled)
+    fprintf(stderr, "VOL: scavenging complete\n");
 # endif
 
 done:
