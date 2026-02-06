@@ -3,6 +3,7 @@ import Testing
 @testable import HFSKit
 
 @Test func copyOutSampleFile() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let imgURL = try testImageURL()
     let volume = try HFSVolume(path: imgURL, writable: false)
     let tempDir = try makeTempDir()
@@ -55,6 +56,7 @@ import Testing
 }
 
 @Test func copyInMountainFile() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
     try volume.copyIn(hostPath: mountainURL, toHFSPath: "mountain")
@@ -73,6 +75,7 @@ import Testing
 }
 
 @Test func listAndDeleteMountainFile() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
     let infoBefore = try volume.volumeInfo()
@@ -104,6 +107,7 @@ import Testing
 }
 
 @Test func copyInOutMountainRoundTrip() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
     let tempDir = try makeTempDir()
@@ -120,6 +124,7 @@ import Testing
 }
 
 @Test func renameMountainFile() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -132,6 +137,7 @@ import Testing
 }
 
 @Test func moveFileToDirectory() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -147,6 +153,7 @@ import Testing
 }
 
 @Test func moveDirectoryToDirectory() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -168,6 +175,7 @@ import Testing
 }
 
 @Test func nestedPathOperations() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -185,6 +193,7 @@ import Testing
 }
 
 @Test func relativeAndAbsolutePathsMatch() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -198,6 +207,7 @@ import Testing
 }
 
 @Test func setTypeCreatorUpdatesAttributes() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -210,6 +220,7 @@ import Testing
 }
 
 @Test func errorCases() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let imgURL = try testImageURL()
     let mountainURL = try mountainURL()
 
@@ -232,6 +243,7 @@ import Testing
 }
 
 @Test func deleteDirectoryWithContentsFails() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
     let volume = try makeWritableVolume()
 
@@ -244,6 +256,7 @@ import Testing
 }
 
 @Test func copyInOutDirectoryAndDeleteRecursively() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let volume = try makeWritableVolume()
     let tempDir = try makeTempDir()
     let sourceDir = tempDir.appendingPathComponent("SourceDir", isDirectory: true)
@@ -278,6 +291,7 @@ import Testing
 }
 
 @Test func copyInOutDirectoryWithEmptyAndSpacedNames() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let volume = try makeWritableVolume()
     let tempDir = try makeTempDir()
     let sourceDir = tempDir.appendingPathComponent("SourceComplex", isDirectory: true)
@@ -305,6 +319,7 @@ import Testing
 }
 
 @Test func overwriteFileReplacesContents() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let volume = try makeWritableVolume()
     let tempDir = try makeTempDir()
     let firstURL = tempDir.appendingPathComponent("first.txt")
@@ -321,6 +336,7 @@ import Testing
 }
 
 @Test func largeFileCopyInOut() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let volume = try makeWritableVolume()
     let tempDir = try makeTempDir()
     let largeURL = tempDir.appendingPathComponent("large.bin")
@@ -337,6 +353,7 @@ import Testing
 }
 
 @Test func readOnlyDirectoryOperationsFail() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let imgURL = try testImageURL()
     let volume = try HFSVolume(path: imgURL, writable: false)
     let tempDir = try makeTempDir()
@@ -352,6 +369,7 @@ import Testing
 }
 
 @Test func listTest2ImageContents() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let imgURL = try test2ImageURL()
     let volume = try HFSVolume(path: imgURL, writable: false)
 
@@ -382,6 +400,7 @@ import Testing
 }
 
 @Test func copyInMacBinaryAsRaw() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let volume = try makeWritableVolume()
     let binURL = try sunglassesURL()
 
@@ -393,6 +412,26 @@ import Testing
     #expect(info.fileCreator == "UNIX")
 }
 
+@Test func openMultiPartitionImageAndListRoot() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let multiURL = try multiImageURL()
+    let partitions = try HFSVolume.listPartitions(path: multiURL)
+    let hfsPartitions = partitions.filter { $0.isHFS }
+
+    #expect(hfsPartitions.count == 1)
+    guard let hfsPartition = hfsPartitions.first else {
+        throw HFSError.invalidArgument("Expected one HFS partition in multi.hda")
+    }
+
+    let defaultVolume = try HFSVolume(path: multiURL, writable: false)
+    let defaultRootEntries = try defaultVolume.list(directory: ":")
+    #expect(defaultRootEntries.isEmpty)
+
+    let explicitVolume = try HFSVolume(path: multiURL, writable: false, partition: hfsPartition.index)
+    let explicitRootEntries = try explicitVolume.list(directory: ":")
+    #expect(explicitRootEntries.isEmpty)
+    #expect(defaultRootEntries.count == explicitRootEntries.count)
+}
 private func testImageURL() throws -> URL {
     guard let imgURL = Bundle.module.url(forResource: "test", withExtension: "img") else {
         throw HFSError.invalidArgument("Missing test image resource")
