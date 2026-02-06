@@ -46,6 +46,73 @@ hfsw_err(const char *detail)
     return err;
 }
 
+static HFSWError
+resolve_hfs_partno_from_map_index(const char *path,
+                                  int requestedPartno,
+                                  int *outResolvedPartno)
+{
+    if (!path || !outResolvedPartno) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    if (requestedPartno <= 0) {
+        *outResolvedPartno = requestedPartno;
+        return hfsw_ok();
+    }
+
+    hfsvol vol;
+    v_init(&vol, HFS_OPT_NOCACHE);
+    if (v_open(&vol, path, HFS_MODE_RDONLY) == -1) {
+        return hfsw_err(hfs_error);
+    }
+
+    Partition map;
+    if (l_getpmentry(&vol, &map, 1) == -1) {
+        v_close(&vol);
+        return hfsw_err(hfs_error);
+    }
+
+    /* No valid partition map: let libhfs handle direct partition semantics. */
+    if (map.pmSig != HFS_PM_SIGWORD) {
+        v_close(&vol);
+        *outResolvedPartno = requestedPartno;
+        return hfsw_ok();
+    }
+
+    unsigned long total = (unsigned long)map.pmMapBlkCnt;
+    int hfsOrdinal = 0;
+    int found = 0;
+
+    for (unsigned long bnum = 1; bnum <= total; ++bnum) {
+        if (l_getpmentry(&vol, &map, bnum) == -1) {
+            v_close(&vol);
+            return hfsw_err(hfs_error);
+        }
+
+        if (strcmp((const char *)map.pmParType, "Apple_HFS") == 0) {
+            ++hfsOrdinal;
+        }
+
+        if ((int)bnum == requestedPartno) {
+            found = 1;
+            break;
+        }
+    }
+
+    if (v_close(&vol) == -1) {
+        return hfsw_err(hfs_error);
+    }
+
+    if (!found || hfsOrdinal == 0) {
+        errno = EINVAL;
+        return hfsw_err("selected partition is not an HFS partition");
+    }
+
+    *outResolvedPartno = hfsOrdinal;
+    return hfsw_ok();
+}
+
 static void
 fill_file_info(const hfsdirent *e, HFSWFileInfo *out)
 {
@@ -116,8 +183,14 @@ hfsw_open_image_ex(const char *path, int readWrite, int partno)
         return result;
     }
 
+    int resolvedPartno = 0;
+    result.error = resolve_hfs_partno_from_map_index(path, partno, &resolvedPartno);
+    if (result.error.code != 0) {
+        return result;
+    }
+
     int mode = readWrite ? 1 : 0; /* HFS_MODE_RDWR / HFS_MODE_RDONLY; libhfs uses 0/1 */
-    hfsvol *vol = hfs_mount((char *)path, partno, mode);
+    hfsvol *vol = hfs_mount((char *)path, resolvedPartno, mode);
     if (!vol) {
         result.error = hfsw_err(hfs_error);
         return result;

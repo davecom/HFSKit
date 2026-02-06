@@ -94,7 +94,9 @@ typedef void (*hfsw_list_callback)(
  */
 HFSImage *hfsw_open_image(const char *path, int readWrite);
 
-/* Open a disk image and return error information if it fails. */
+/* Open a disk image and return error information if it fails.
+ * partno: 0 for whole-device mount; otherwise partition-map entry index.
+ */
 HFSWOpenResult hfsw_open_image_ex(const char *path, int readWrite, int partno);
 
 /* Flush + close the image, freeing resources. */
