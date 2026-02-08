@@ -105,6 +105,11 @@ HFSWOpenResult hfsw_open_image_ex(const char *path, int readWrite, int partno);
 /* Flush + close the image, freeing resources. */
 void hfsw_close_image(HFSImage *image);
 
+/* Create a new blank raw image file and format it as a single HFS volume. */
+HFSWError hfsw_create_blank_image(const char *path,
+                                  uint64_t sizeBytes,
+                                  const char *volumeName);
+
 /* Enable/disable libhfs diagnostic logging (e.g. BLOCK: READ/WRITE). */
 void hfsw_set_debug_logging(int enabled);
 int hfsw_get_debug_logging(void);
@@ -189,6 +194,10 @@ HFSWError hfsw_set_type_creator(HFSImage *image,
                                 const char *hfsPath,
                                 const char *fileType,
                                 const char *fileCreator);
+
+/* Set the volume blessed folder to the directory at hfsPath. */
+HFSWError hfsw_set_blessed(HFSImage *image,
+                           const char *hfsPath);
 
 #ifdef __cplusplus
 }

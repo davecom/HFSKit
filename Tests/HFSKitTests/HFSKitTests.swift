@@ -74,6 +74,109 @@ import Testing
     #expect(attributes.resourceForkSize == 0)
 }
 
+@Test func createBlankVolumeAndOpen() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let tempDir = try makeTempDir()
+    let imageURL = tempDir.appendingPathComponent("blank.hda")
+
+    try HFSVolume.createBlank(path: imageURL, size: 8 * 1024 * 1024, volumeName: "BlankVol")
+
+    let volume = try HFSVolume(path: imageURL, writable: false)
+    let info = try volume.volumeInfo()
+    #expect(info.name == "BlankVol")
+
+    let root = try volume.list(directory: ":")
+    #expect(root.isEmpty)
+}
+
+@Test func createBlankVolumeCopyRoundTrip() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let tempDir = try makeTempDir()
+    let imageURL = tempDir.appendingPathComponent("blank-roundtrip.hda")
+    let outURL = tempDir.appendingPathComponent("mountain.out")
+    let sourceURL = try mountainURL()
+    let sourceData = try Data(contentsOf: sourceURL)
+
+    try HFSVolume.createBlank(path: imageURL, size: 8 * 1024 * 1024, volumeName: "BlankRT")
+
+    let volume = try HFSVolume(path: imageURL, writable: true)
+    try volume.copyIn(hostPath: sourceURL, toHFSPath: "mountain", mode: .raw)
+    try volume.copyOut(hfsPath: "mountain", toHostPath: outURL, mode: .raw)
+
+    let outData = try Data(contentsOf: outURL)
+    #expect(outData == sourceData)
+}
+
+@Test func setBlessedFolderUpdatesVolumeInfo() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let tempDir = try makeTempDir()
+    let imageURL = tempDir.appendingPathComponent("blank-blessed.hda")
+
+    try HFSVolume.createBlank(path: imageURL, size: 8 * 1024 * 1024, volumeName: "BlessedVol")
+    let volume = try HFSVolume(path: imageURL, writable: true)
+    try volume.makeDirectory(path: ":System Folder")
+    try volume.setBlessed(path: ":System Folder")
+
+    let info = try volume.volumeInfo()
+    #expect(info.blessedFolderId != 0)
+}
+
+@Test func setBlessedFailsForFilePath() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableVolume()
+    let mountainURL = try mountainURL()
+    try volume.copyIn(hostPath: mountainURL, toHFSPath: "mountain", mode: .raw)
+
+    do {
+        try volume.setBlessed(path: "mountain")
+        #expect(Bool(false))
+    } catch let error as HFSError {
+        guard case let .operationFailed(operation, errno, _, path, _) = error else {
+            throw error
+        }
+        #expect(operation == "set blessed folder")
+        #expect(errno == ENOTDIR)
+        #expect(path == "mountain")
+    }
+}
+
+@Test func createBlankRejectsVolumeLargerThan2GiB() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let tempDir = try makeTempDir()
+    let imageURL = tempDir.appendingPathComponent("too-large.hda")
+
+    do {
+        try HFSVolume.createBlank(
+            path: imageURL,
+            size: (2 * 1024 * 1024 * 1024) + 1,
+            volumeName: "TooLarge"
+        )
+        #expect(Bool(false))
+    } catch let error as HFSError {
+        guard case let .invalidArgument(message) = error else {
+            throw error
+        }
+        #expect(message.contains("2 GiB"))
+    }
+}
+
+@Test func createBlankRejectsVolumeNameLongerThan27Characters() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let tempDir = try makeTempDir()
+    let imageURL = tempDir.appendingPathComponent("bad-name.hda")
+    let longName = "1234567890123456789012345678"
+
+    do {
+        try HFSVolume.createBlank(path: imageURL, size: 8 * 1024 * 1024, volumeName: longName)
+        #expect(Bool(false))
+    } catch let error as HFSError {
+        guard case let .invalidArgument(message) = error else {
+            throw error
+        }
+        #expect(message.contains("at most 27"))
+    }
+}
+
 @Test func listAndDeleteMountainFile() async throws {
     HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()

@@ -148,6 +148,9 @@ public struct HFSPartitionInfo: CustomStringConvertible {
 // MARK: - Volume
 
 public final class HFSVolume {
+    private static let maxVolumeBytes: UInt64 = 2 * 1024 * 1024 * 1024
+    private static let maxVolumeNameLength: Int = 27
+
     private var handle: UnsafeMutablePointer<HFSImage>?
 
     public var isClosed: Bool {
@@ -170,6 +173,37 @@ public final class HFSVolume {
             throw HFSError.openFailed(errno: result.error.code, detail: detail)
         }
         self.handle = h
+    }
+
+    public static func createBlank(path: URL, size: UInt64, volumeName: String) throws {
+        if size > maxVolumeBytes {
+            throw HFSError.invalidArgument(
+                "Volume size \(size) exceeds the maximum supported HFS size of 2 GiB (\(maxVolumeBytes) bytes)."
+            )
+        }
+
+        if volumeName.count > maxVolumeNameLength {
+            throw HFSError.invalidArgument(
+                "Volume name \"\(volumeName)\" is \(volumeName.count) characters; HFS allows at most \(maxVolumeNameLength)."
+            )
+        }
+
+        let error = path.path.withCString { cPath in
+            volumeName.withCString { cName in
+                hfsw_create_blank_image(cPath, size, cName)
+            }
+        }
+
+        if error.code != 0 {
+            let detail = error.detail != nil ? String(cString: error.detail) : nil
+            throw HFSError.operationFailed(
+                operation: "create blank volume",
+                errno: error.code,
+                detail: detail,
+                path: path.path,
+                destination: nil
+            )
+        }
     }
 
     deinit {
@@ -544,6 +578,20 @@ public final class HFSVolume {
                                fileCreator: String) throws
     {
         try setTypeCreator(path: info.path, fileType: fileType, fileCreator: fileCreator)
+    }
+
+    public func setBlessed(path: String) throws {
+        let h = try requireHandle()
+
+        let error = path.withCString { cPath in
+            hfsw_set_blessed(h, cPath)
+        }
+
+        try throwIfError(error, operation: "set blessed folder", path: path)
+    }
+
+    public func setBlessed(_ info: HFSFileInfo) throws {
+        try setBlessed(path: info.path)
     }
 
     // MARK: - Directory delete

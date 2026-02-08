@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* libhfs header from hfsutils (must be in your include path). */
 #include "libhfs.h"
@@ -222,6 +224,44 @@ hfsw_close_image(HFSImage *image)
         image->vol = NULL;
     }
     free(image);
+}
+
+HFSWError
+hfsw_create_blank_image(const char *path,
+                        uint64_t sizeBytes,
+                        const char *volumeName)
+{
+    if (!path || !volumeName) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    if (sizeBytes == 0) {
+        errno = EINVAL;
+        return hfsw_err("image size must be greater than zero");
+    }
+
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0666);
+    if (fd == -1) {
+        return hfsw_err("error creating image file");
+    }
+
+    if (ftruncate(fd, (off_t)sizeBytes) == -1) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return hfsw_err("error sizing image file");
+    }
+
+    if (close(fd) == -1) {
+        return hfsw_err("error closing image file");
+    }
+
+    if (hfs_format(path, 0, HFS_OPT_NOCACHE, volumeName, 0, NULL) == -1) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
 }
 
 void
@@ -595,6 +635,38 @@ hfsw_set_type_creator(HFSImage *image,
     normalize_fourcc(fileCreator, ent.u.file.creator);
 
     if (hfs_setattr(image->vol, (char *)hfsPath, &ent) != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
+}
+
+HFSWError
+hfsw_set_blessed(HFSImage *image,
+                 const char *hfsPath)
+{
+    if (!image || !image->vol || !hfsPath) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    hfsdirent dirEnt;
+    if (hfs_stat(image->vol, (char *)hfsPath, &dirEnt) != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    if (!(dirEnt.flags & HFS_ISDIR)) {
+        errno = ENOTDIR;
+        return hfsw_err("blessed path must be a directory");
+    }
+
+    hfsvolent volEnt;
+    if (hfs_vstat(image->vol, &volEnt) != 0) {
+        return hfsw_err(hfs_error);
+    }
+
+    volEnt.blessed = dirEnt.cnid;
+    if (hfs_vsetattr(image->vol, &volEnt) != 0) {
         return hfsw_err(hfs_error);
     }
 
