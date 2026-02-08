@@ -406,6 +406,9 @@ public final class HFSVolume {
     public enum CopyMode: Int32 {
         case auto = 0
         case raw  = 1
+        case macBinary = 2
+        case binHex = 3
+        case text = 4
     }
 
     public func copyIn(hostPath: URL,

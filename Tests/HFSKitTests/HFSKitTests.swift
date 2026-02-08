@@ -345,8 +345,8 @@ import Testing
     let data = Data(repeating: 0xA5, count: 20000)
     try data.write(to: largeURL)
 
-    try volume.copyIn(hostPath: largeURL, toHFSPath: "large.bin")
-    try volume.copyOut(hfsPath: "large.bin", toHostPath: outputURL)
+    try volume.copyIn(hostPath: largeURL, toHFSPath: "large.bin", mode: .raw)
+    try volume.copyOut(hfsPath: "large.bin", toHostPath: outputURL, mode: .raw)
 
     let outData = try Data(contentsOf: outputURL)
     #expect(outData == data)
@@ -404,7 +404,7 @@ import Testing
     let volume = try makeWritableVolume()
     let binURL = try sunglassesURL()
 
-    try volume.copyIn(hostPath: binURL, toHFSPath: "sunglasses.bin")
+    try volume.copyIn(hostPath: binURL, toHFSPath: "sunglasses.bin", mode: .raw)
     let info = try volume.attributes(of: "sunglasses.bin")
     let binData = try Data(contentsOf: binURL)
     #expect(info.dataForkSize == binData.count)
@@ -432,6 +432,106 @@ import Testing
     #expect(explicitRootEntries.isEmpty)
     #expect(defaultRootEntries.count == explicitRootEntries.count)
 }
+
+@Test func macBinaryModeCopyInOutRoundTripAndRawControl() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableMultiVolume()
+    let tempDir = try makeTempDir()
+    let sampleURL = try macBinarySampleURL()
+    let sampleData = try Data(contentsOf: sampleURL)
+
+    try volume.copyIn(hostPath: sampleURL, toHFSPath: "macbinary.mode", mode: .macBinary)
+    let modeInfo = try volume.attributes(of: "macbinary.mode")
+    #expect(modeInfo.dataForkSize > 0)
+
+    let modeOutURL = tempDir.appendingPathComponent("macbinary.mode.out.bin")
+    try volume.copyOut(hfsPath: "macbinary.mode", toHostPath: modeOutURL, mode: .macBinary)
+    #expect((try Data(contentsOf: modeOutURL)).count > 0)
+
+    try volume.copyIn(hostPath: modeOutURL, toHFSPath: "macbinary.roundtrip", mode: .macBinary)
+    let roundTripInfo = try volume.attributes(of: "macbinary.roundtrip")
+    #expect(roundTripInfo.dataForkSize == modeInfo.dataForkSize)
+    #expect(roundTripInfo.resourceForkSize == modeInfo.resourceForkSize)
+    #expect(roundTripInfo.fileType == modeInfo.fileType)
+    #expect(roundTripInfo.fileCreator == modeInfo.fileCreator)
+
+    let modeRawOutURL2 = tempDir.appendingPathComponent("macbinary.roundtrip.raw")
+    try volume.copyOut(hfsPath: "macbinary.roundtrip", toHostPath: modeRawOutURL2, mode: .raw)
+
+    let modeRawOutURL = tempDir.appendingPathComponent("macbinary.mode.raw")
+    try volume.copyOut(hfsPath: "macbinary.mode", toHostPath: modeRawOutURL, mode: .raw)
+    #expect((try Data(contentsOf: modeRawOutURL)).count == modeInfo.dataForkSize)
+    #expect(try Data(contentsOf: modeRawOutURL2) == Data(contentsOf: modeRawOutURL))
+
+    try volume.copyIn(hostPath: sampleURL, toHFSPath: "macbinary.raw", mode: .raw)
+    let rawInfo = try volume.attributes(of: "macbinary.raw")
+    #expect(rawInfo.resourceForkSize == 0)
+    #expect(rawInfo.dataForkSize == sampleData.count)
+    #expect(modeInfo.dataForkSize != rawInfo.dataForkSize || modeInfo.resourceForkSize != rawInfo.resourceForkSize)
+}
+
+@Test func binHexModeCopyInOutRoundTripAndRawControl() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableMultiVolume()
+    let tempDir = try makeTempDir()
+    let sampleURL = try binHexSampleURL()
+    let sampleData = try Data(contentsOf: sampleURL)
+
+    try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex.mode", mode: .binHex)
+    let modeInfo = try volume.attributes(of: "binhex.mode")
+    #expect(modeInfo.dataForkSize > 0)
+
+    let modeOutURL = tempDir.appendingPathComponent("binhex.mode.out.hqx")
+    try volume.copyOut(hfsPath: "binhex.mode", toHostPath: modeOutURL, mode: .binHex)
+    #expect((try Data(contentsOf: modeOutURL)).count > 0)
+
+    try volume.copyIn(hostPath: modeOutURL, toHFSPath: "binhex.roundtrip", mode: .binHex)
+    let roundTripInfo = try volume.attributes(of: "binhex.roundtrip")
+    #expect(roundTripInfo.dataForkSize == modeInfo.dataForkSize)
+    #expect(roundTripInfo.resourceForkSize == modeInfo.resourceForkSize)
+    #expect(roundTripInfo.fileType == modeInfo.fileType)
+    #expect(roundTripInfo.fileCreator == modeInfo.fileCreator)
+
+    let modeRawOutURL2 = tempDir.appendingPathComponent("binhex.roundtrip.raw")
+    try volume.copyOut(hfsPath: "binhex.roundtrip", toHostPath: modeRawOutURL2, mode: .raw)
+
+    let modeRawOutURL = tempDir.appendingPathComponent("binhex.mode.raw")
+    try volume.copyOut(hfsPath: "binhex.mode", toHostPath: modeRawOutURL, mode: .raw)
+    #expect((try Data(contentsOf: modeRawOutURL)).count == modeInfo.dataForkSize)
+    #expect(try Data(contentsOf: modeRawOutURL2) == Data(contentsOf: modeRawOutURL))
+
+    try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex.raw", mode: .raw)
+    let rawInfo = try volume.attributes(of: "binhex.raw")
+    #expect(rawInfo.resourceForkSize == 0)
+    #expect(rawInfo.dataForkSize == sampleData.count)
+    #expect(modeInfo.dataForkSize != rawInfo.dataForkSize || modeInfo.resourceForkSize != rawInfo.resourceForkSize)
+}
+
+@Test func textModeCopyInOutRoundTripAndRawControl() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableVolume()
+    let tempDir = try makeTempDir()
+    let sampleURL = try textSampleURL()
+    let sampleData = try Data(contentsOf: sampleURL)
+
+    try volume.copyIn(hostPath: sampleURL, toHFSPath: "text.mode", mode: .text)
+    let modeInfo = try volume.attributes(of: "text.mode")
+    #expect(modeInfo.resourceForkSize == 0)
+
+    let modeOutURL = tempDir.appendingPathComponent("text.mode.out.txt")
+    try volume.copyOut(hfsPath: "text.mode", toHostPath: modeOutURL, mode: .text)
+    #expect(try Data(contentsOf: modeOutURL) == sampleData)
+
+    try volume.copyIn(hostPath: sampleURL, toHFSPath: "text.raw", mode: .raw)
+    let rawInfo = try volume.attributes(of: "text.raw")
+    #expect(rawInfo.resourceForkSize == 0)
+    #expect(rawInfo.dataForkSize == sampleData.count)
+
+    let rawTextOutURL = tempDir.appendingPathComponent("text.raw.out.txt")
+    try volume.copyOut(hfsPath: "text.raw", toHostPath: rawTextOutURL, mode: .text)
+    #expect(try Data(contentsOf: rawTextOutURL) == sampleData)
+}
+
 private func testImageURL() throws -> URL {
     guard let imgURL = Bundle.module.url(forResource: "test", withExtension: "img") else {
         throw HFSError.invalidArgument("Missing test image resource")
@@ -449,6 +549,27 @@ private func mountainURL() throws -> URL {
 private func sunglassesURL() throws -> URL {
     guard let url = Bundle.module.url(forResource: "sunglasses", withExtension: "bin") else {
         throw HFSError.invalidArgument("Missing sunglasses resource")
+    }
+    return url
+}
+
+private func binHexSampleURL() throws -> URL {
+    guard let url = Bundle.module.url(forResource: "binhex_sample", withExtension: "hqx") else {
+        throw HFSError.invalidArgument("Missing binhex sample resource")
+    }
+    return url
+}
+
+private func macBinarySampleURL() throws -> URL {
+    guard let url = Bundle.module.url(forResource: "macbinary_sample.smi_", withExtension: "bin") else {
+        throw HFSError.invalidArgument("Missing macbinary sample resource")
+    }
+    return url
+}
+
+private func textSampleURL() throws -> URL {
+    guard let url = Bundle.module.url(forResource: "text_sample", withExtension: "txt") else {
+        throw HFSError.invalidArgument("Missing text sample resource")
     }
     return url
 }
@@ -478,6 +599,14 @@ private func makeWritableVolume() throws -> HFSVolume {
     let imgURL = try testImageURL()
     let tempDir = try makeTempDir()
     let writableImageURL = tempDir.appendingPathComponent("test.img")
+    try FileManager.default.copyItem(at: imgURL, to: writableImageURL)
+    return try HFSVolume(path: writableImageURL, writable: true)
+}
+
+private func makeWritableMultiVolume() throws -> HFSVolume {
+    let imgURL = try multiImageURL()
+    let tempDir = try makeTempDir()
+    let writableImageURL = tempDir.appendingPathComponent("multi.hda")
     try FileManager.default.copyItem(at: imgURL, to: writableImageURL)
     return try HFSVolume(path: writableImageURL, writable: true)
 }

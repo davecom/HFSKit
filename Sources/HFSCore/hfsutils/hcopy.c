@@ -34,19 +34,22 @@
 # include <sys/stat.h>
 
 # include "hfs.h"
-# include "hcwd.h"
-# include "hfsutil.h"
 # include "hcopy.h"
 # include "copyin.h"
 # include "copyout.h"
 
+# define ERROR(code, str)  (errno = (code))
+
+# ifdef HFSUTILS_CLI
+#  include "hcwd.h"
+#  include "hfsutil.h"
 extern int optind;
+# endif
 
 /*
  * NAME:	automode_unix()
  * DESCRIPTION:	automatically choose copyin transfer mode for UNIX path
  */
-static
 cpifunc automode_unix(const char *path)
 {
   int i;
@@ -82,7 +85,6 @@ cpifunc automode_unix(const char *path)
  * NAME:	do_copyin()
  * DESCRIPTION:	copy files from UNIX to HFS
  */
-static
 int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 {
   hfsdirent ent;
@@ -94,7 +96,6 @@ int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 		   ! (ent.flags & HFS_ISDIR)))
     {
       ERROR(ENOTDIR, 0);
-      hfsutil_perrorp(dest);
 
       return 1;
     }
@@ -124,7 +125,6 @@ int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 	  S_ISDIR(sbuf.st_mode))
 	{
 	  ERROR(EISDIR, 0);
-	  hfsutil_perrorp(argv[i]);
 
 	  result = 1;
 	}
@@ -136,7 +136,6 @@ int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 	  if (copyfile(argv[i], vol, dest) == -1)
 	    {
 	      ERROR(errno, cpi_error);
-	      hfsutil_perrorp(argv[i]);
 
 	      result = 1;
 	    }
@@ -150,7 +149,6 @@ int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
  * NAME:	automode_hfs()
  * DESCRIPTION:	automatically choose copyout transfer mode for HFS path
  */
-static
 cpofunc automode_hfs(hfsvol *vol, const char *path)
 {
   hfsdirent ent;
@@ -171,7 +169,6 @@ cpofunc automode_hfs(hfsvol *vol, const char *path)
  * NAME:	do_copyout()
  * DESCRIPTION:	copy files from HFS to UNIX
  */
-static
 int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 {
   struct stat sbuf;
@@ -183,7 +180,6 @@ int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 		   ! S_ISDIR(sbuf.st_mode)))
     {
       ERROR(ENOTDIR, 0);
-      hfsutil_perrorp(dest);
 
       return 1;
     }
@@ -213,7 +209,6 @@ int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 	  (ent.flags & HFS_ISDIR))
 	{
 	  ERROR(EISDIR, 0);
-	  hfsutil_perrorp(argv[i]);
 
 	  result = 1;
 	}
@@ -225,7 +220,6 @@ int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 	  if (copyfile(vol, argv[i], dest) == -1)
 	    {
 	      ERROR(errno, cpo_error);
-	      hfsutil_perrorp(argv[i]);
 
 	      result = 1;
 	    }
@@ -239,7 +233,7 @@ int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
  * NAME:	usage()
  * DESCRIPTION:	display usage message
  */
-static
+# ifdef HFSUTILS_CLI
 int usage(void)
 {
   fprintf(stderr, "Usage: %s [-m|-b|-t|-r|-a] source-path [...] target-path\n",
@@ -316,3 +310,4 @@ int hcopy_main(int argc, char *argv[])
 
   return result;
 }
+# endif /* HFSUTILS_CLI */

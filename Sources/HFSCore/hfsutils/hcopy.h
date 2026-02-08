@@ -19,4 +19,17 @@
  * $Id: hcopy.h,v 1.6 1998/04/11 08:26:56 rob Exp $
  */
 
+typedef struct _hfsvol_ hfsvol;
+# include "copyin.h"
+# include "copyout.h"
+
+cpifunc automode_unix(const char *);
+int do_copyin(hfsvol *, int, char *[], const char *, int);
+
+cpofunc automode_hfs(hfsvol *, const char *);
+int do_copyout(hfsvol *, int, char *[], const char *, int);
+
+# ifdef HFSUTILS_CLI
+int usage(void);
 int hcopy_main(int, char *[]);
+# endif

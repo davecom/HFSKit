@@ -48,9 +48,12 @@ typedef struct {
     HFSWError error;          /* error info if image is NULL */
 } HFSWOpenResult;
 
-/* Copy modes (for now only AUTO and RAW are implemented; others reserved). */
+/* Copy modes mirroring hcopy (-a/-r/-m/-b/-t). */
 #define HFSW_COPY_MODE_AUTO 0
 #define HFSW_COPY_MODE_RAW  1
+#define HFSW_COPY_MODE_MACB 2
+#define HFSW_COPY_MODE_BINH 3
+#define HFSW_COPY_MODE_TEXT 4
 
 /* File information returned by hfsw_stat() and hfsw_list_dir() */
 typedef struct {
@@ -159,8 +162,8 @@ HFSWError hfsw_mkdir(HFSImage *image,
 /* Copy a host file (POSIX path) into the HFS image.
  * hostPath: POSIX path to existing file.
  * hfsDestPath: full HFS destination path INCLUDING filename.
- * mode: HFSW_COPY_MODE_AUTO or HFSW_COPY_MODE_RAW.
- * Currently both act as RAW data-fork copies.
+ * mode: HFSW_COPY_MODE_AUTO/HFSW_COPY_MODE_RAW/HFSW_COPY_MODE_MACB/
+ *       HFSW_COPY_MODE_BINH/HFSW_COPY_MODE_TEXT.
  */
 HFSWError hfsw_copy_in(HFSImage *image,
                        const char *hostPath,
@@ -170,8 +173,8 @@ HFSWError hfsw_copy_in(HFSImage *image,
 /* Copy an HFS file to the host filesystem.
  * hfsPath: full HFS path to file.
  * hostDestPath: POSIX path to create/overwrite.
- * mode: HFSW_COPY_MODE_AUTO or HFSW_COPY_MODE_RAW.
- * Currently both act as RAW data-fork copies.
+ * mode: HFSW_COPY_MODE_AUTO/HFSW_COPY_MODE_RAW/HFSW_COPY_MODE_MACB/
+ *       HFSW_COPY_MODE_BINH/HFSW_COPY_MODE_TEXT.
  */
 HFSWError hfsw_copy_out(HFSImage *image,
                         const char *hfsPath,

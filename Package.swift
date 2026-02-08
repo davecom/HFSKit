@@ -13,7 +13,6 @@ let package = Package(
             name: "HFSCore",
             path: "Sources/HFSCore",
             exclude: [
-                "hfsutils/hcopy.c",
                 "libhfs/os.c"
             ],
             publicHeadersPath: "include",
@@ -38,7 +37,10 @@ let package = Package(
                     .copy("Resources/test2.img"),
                     .copy("Resources/mountain"),
                     .copy("Resources/sunglasses.bin"),
-                    .copy("Resources/multi.hda")
+                    .copy("Resources/multi.hda"),
+                    .copy("Resources/binhex_sample.hqx"),
+                    .copy("Resources/macbinary_sample.smi_.bin"),
+                    .copy("Resources/text_sample.txt")
                 ]
         )
     ]

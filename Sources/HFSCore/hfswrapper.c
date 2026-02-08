@@ -13,6 +13,7 @@
 #include "low.h"
 #include "volume.h"
 #include "copyin.h"
+#include "hcopy.h"
 
 /* ---- Internal helpers -------------------------------------------------- */
 
@@ -501,6 +502,25 @@ normalize_fourcc(const char *in, char out[5])
     out[4] = '\0';
 }
 
+static int
+hfsw_mode_to_hcopy_mode(int mode)
+{
+    switch (mode) {
+        case HFSW_COPY_MODE_AUTO:
+            return 'a';
+        case HFSW_COPY_MODE_RAW:
+            return 'r';
+        case HFSW_COPY_MODE_MACB:
+            return 'm';
+        case HFSW_COPY_MODE_BINH:
+            return 'b';
+        case HFSW_COPY_MODE_TEXT:
+            return 't';
+        default:
+            return 0;
+    }
+}
+
 HFSWError
 hfsw_copy_in(HFSImage *image,
              const char *hostPath,
@@ -511,9 +531,17 @@ hfsw_copy_in(HFSImage *image,
         errno = EINVAL;
         return hfsw_err(NULL);
     }
-    (void)mode;
 
-    if (cpi_raw(hostPath, image->vol, hfsDestPath) != 0) {
+    int hcopyMode = hfsw_mode_to_hcopy_mode(mode);
+    if (hcopyMode == 0) {
+        errno = EINVAL;
+        return hfsw_err("unsupported copy mode");
+    }
+
+    char *sources[1];
+    sources[0] = (char *)hostPath;
+
+    if (do_copyin(image->vol, 1, sources, hfsDestPath, hcopyMode) != 0) {
         return hfsw_err(cpi_error);
     }
 
@@ -526,50 +554,22 @@ hfsw_copy_out(HFSImage *image,
               const char *hostDestPath,
               int mode)
 {
-    (void)mode; /* For now, we treat all modes as RAW data-fork copies. */
-
     if (!image || !image->vol || !hfsPath || !hostDestPath) {
         errno = EINVAL;
         return hfsw_err(NULL);
     }
 
-    hfsfile *hf = hfs_open(image->vol, (char *)hfsPath);
-    if (!hf) {
-        return hfsw_err(hfs_error);
+    int hcopyMode = hfsw_mode_to_hcopy_mode(mode);
+    if (hcopyMode == 0) {
+        errno = EINVAL;
+        return hfsw_err("unsupported copy mode");
     }
 
-    FILE *fp = fopen(hostDestPath, "wb");
-    if (!fp) {
-        hfs_close(hf);
-        return hfsw_err(NULL);
-    }
+    char *sources[1];
+    sources[0] = (char *)hfsPath;
 
-    unsigned char buffer[4096];
-    int result = 0;
-
-    while (1) {
-        long nread = hfs_read(hf, buffer, sizeof(buffer));
-        if (nread < 0) {
-            result = -1;
-            break;
-        }
-        if (nread == 0) {
-            /* EOF */
-            break;
-        }
-
-        size_t nwritten = fwrite(buffer, 1, (size_t)nread, fp);
-        if (nwritten != (size_t)nread) {
-            errno = EIO;
-            result = -1;
-            break;
-        }
-    }
-
-    hfs_close(hf);
-    fclose(fp);
-    if (result != 0) {
-        return hfsw_err(hfs_error);
+    if (do_copyout(image->vol, 1, sources, hostDestPath, hcopyMode) != 0) {
+        return hfsw_err(cpo_error);
     }
 
     return hfsw_ok();
