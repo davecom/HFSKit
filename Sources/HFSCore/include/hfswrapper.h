@@ -110,6 +110,16 @@ HFSWError hfsw_create_blank_image(const char *path,
                                   uint64_t sizeBytes,
                                   const char *volumeName);
 
+/* Run hfsck with repair+verbose behavior and return captured text output.
+ * outResult receives hfsck's return code (0 = clean/success, nonzero = issues).
+ * outOutput receives a malloc-allocated C string that must be freed with
+ * hfsw_free_string().
+ */
+HFSWError hfsw_hfsck(const char *path, int *outResult, char **outOutput);
+
+/* Free strings allocated by hfswrapper APIs (e.g. hfsw_hfsck output). */
+void hfsw_free_string(char *ptr);
+
 /* Enable/disable libhfs diagnostic logging (e.g. BLOCK: READ/WRITE). */
 void hfsw_set_debug_logging(int enabled);
 int hfsw_get_debug_logging(void);

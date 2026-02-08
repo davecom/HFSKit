@@ -177,6 +177,40 @@ import Testing
     }
 }
 
+@Test func runHFSCheckReturnsTextOutput() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let imgURL = try testImageURL()
+    let tempDir = try makeTempDir()
+    let writableImageURL = tempDir.appendingPathComponent("check.img")
+    try FileManager.default.copyItem(at: imgURL, to: writableImageURL)
+
+    let output = try runHFSCheck(on: writableImageURL)
+    #expect(!output.isEmpty)
+    #expect(output.contains("*** Checking"))
+}
+
+@Test func runMDBFix() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let imgURL = try testImageURL()
+    let tempDir = try makeTempDir()
+    let brokenURL = tempDir.appendingPathComponent("broken-mdb.img")
+    try FileManager.default.copyItem(at: imgURL, to: brokenURL)
+
+    let handle = try FileHandle(forUpdating: brokenURL)
+    defer { try? handle.close() }
+
+    /* MDB is at logical block 2; signature is first 2 bytes of MDB. */
+    try handle.seek(toOffset: 2 * 512)
+    try handle.write(contentsOf: Data([0x00, 0x00]))
+
+    let output = try runHFSCheck(on: brokenURL)
+    #expect(output.contains("Bad volume signature"))
+
+    let repaired = try HFSVolume(path: brokenURL, writable: false)
+    let info = try repaired.volumeInfo()
+    #expect(!info.name.isEmpty)
+}
+
 @Test func listAndDeleteMountainFile() async throws {
     HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()

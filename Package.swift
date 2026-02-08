@@ -13,13 +13,15 @@ let package = Package(
             name: "HFSCore",
             path: "Sources/HFSCore",
             exclude: [
-                "libhfs/os.c"
+                "libhfs/os.c",
+                "hfsck/main.c"
             ],
             publicHeadersPath: "include",
             cSettings: [
                 .define("HAVE_CONFIG_H"),
                 .headerSearchPath("libhfs"),
-                .headerSearchPath("hfsutils")
+                .headerSearchPath("hfsutils"),
+                .headerSearchPath("hfsck")
                 // add more if needed
             ]
         ),

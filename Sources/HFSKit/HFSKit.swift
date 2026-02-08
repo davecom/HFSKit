@@ -33,6 +33,42 @@ public enum HFSKitSettings {
     }
 }
 
+public func runHFSCheck(on path: URL) throws -> String {
+    var result: Int32 = 1
+    var outputPtr: UnsafeMutablePointer<CChar>?
+
+    let error = path.path.withCString { cPath in
+        hfsw_hfsck(cPath, &result, &outputPtr)
+    }
+
+    if error.code != 0 {
+        let detail = error.detail != nil ? String(cString: error.detail) : nil
+        throw HFSError.operationFailed(
+            operation: "hfsck",
+            errno: error.code,
+            detail: detail,
+            path: path.path,
+            destination: nil
+        )
+    }
+
+    defer {
+        if let outputPtr {
+            hfsw_free_string(outputPtr)
+        }
+    }
+
+    let output = outputPtr.map { String(cString: $0) } ?? ""
+    if result == 0 {
+        return output
+    }
+
+    if output.isEmpty {
+        return "hfsck reported issues (code \(result))."
+    }
+    return output
+}
+
 // MARK: - Errors
 
 public enum HFSError: Error {

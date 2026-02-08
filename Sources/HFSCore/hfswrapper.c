@@ -17,6 +17,11 @@
 #include "copyin.h"
 #include "hcopy.h"
 
+int hfsck(hfsvol *, int);
+#define HFSCK_REPAIR  0x0001
+#define HFSCK_VERBOSE 0x0100
+#define HFSCK_YES     0x0200
+
 /* ---- Internal helpers -------------------------------------------------- */
 
 int hfs_debug_logging_enabled = 1;
@@ -49,6 +54,63 @@ hfsw_err(const char *detail)
     err.code = errno ? errno : EIO;
     err.detail = normalize_error_detail(detail);
     return err;
+}
+
+static int
+hfsw_run_hfsck_core(const char *path)
+{
+    int nparts, pnum, result;
+    int options = HFSCK_REPAIR | HFSCK_VERBOSE | HFSCK_YES;
+    hfsvol vol;
+
+    nparts = hfs_nparts(path);
+    if (nparts == 0) {
+        fprintf(stderr, "%s: partitioned medium contains no HFS partitions\n", path);
+        return 1;
+    }
+
+    if (nparts > 1) {
+        fprintf(stderr, "%s: must specify partition number (%d available)\n", path, nparts);
+        return 1;
+    } else if (nparts == -1) {
+        pnum = 0;
+    } else {
+        pnum = 1;
+    }
+
+    v_init(&vol, HFS_OPT_NOCACHE);
+
+    result = v_open(&vol, path, HFS_MODE_RDWR);
+    if (result == -1) {
+        vol.flags |= HFS_VOL_READONLY;
+        result = v_open(&vol, path, HFS_MODE_RDONLY);
+    }
+
+    if (result == -1) {
+        perror(path);
+        return 1;
+    }
+
+    if (vol.flags & HFS_VOL_READONLY) {
+        fprintf(stderr, "%s: warning: %s not writable; cannot repair\n", "hfsw_hfsck", path);
+        options &= ~HFSCK_REPAIR;
+    }
+
+    if (v_geometry(&vol, pnum) == -1 || l_getmdb(&vol, &vol.mdb, 0) == -1) {
+        perror(path);
+        v_close(&vol);
+        return 1;
+    }
+
+    result = hfsck(&vol, options);
+    vol.flags |= HFS_VOL_MOUNTED;
+
+    if (v_close(&vol) == -1) {
+        perror("closing volume");
+        return 1;
+    }
+
+    return result;
 }
 
 static HFSWError
@@ -224,6 +286,104 @@ hfsw_close_image(HFSImage *image)
         image->vol = NULL;
     }
     free(image);
+}
+
+HFSWError
+hfsw_hfsck(const char *path, int *outResult, char **outOutput)
+{
+    if (!path || !outResult || !outOutput) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    *outResult = 1;
+    *outOutput = NULL;
+
+    FILE *capture = tmpfile();
+    if (!capture) {
+        return hfsw_err("failed to create temporary capture file");
+    }
+
+    int captureFD = fileno(capture);
+    int savedStdout = dup(STDOUT_FILENO);
+    int savedStderr = dup(STDERR_FILENO);
+    if (savedStdout == -1 || savedStderr == -1) {
+        if (savedStdout != -1) close(savedStdout);
+        if (savedStderr != -1) close(savedStderr);
+        fclose(capture);
+        return hfsw_err("failed to duplicate stdio handles");
+    }
+
+    if (dup2(captureFD, STDOUT_FILENO) == -1 || dup2(captureFD, STDERR_FILENO) == -1) {
+        close(savedStdout);
+        close(savedStderr);
+        fclose(capture);
+        return hfsw_err("failed to redirect stdio");
+    }
+
+    int result = hfsw_run_hfsck_core(path);
+
+    fflush(stdout);
+    fflush(stderr);
+
+    int restoreErrno = 0;
+    if (dup2(savedStdout, STDOUT_FILENO) == -1 || dup2(savedStderr, STDERR_FILENO) == -1) {
+        restoreErrno = errno ? errno : EIO;
+    }
+    close(savedStdout);
+    close(savedStderr);
+
+    if (fseek(capture, 0, SEEK_END) != 0) {
+        fclose(capture);
+        errno = restoreErrno ? restoreErrno : errno;
+        return hfsw_err("failed to size hfsck output");
+    }
+
+    long length = ftell(capture);
+    if (length < 0) {
+        fclose(capture);
+        errno = restoreErrno ? restoreErrno : errno;
+        return hfsw_err("failed to read hfsck output size");
+    }
+
+    if (fseek(capture, 0, SEEK_SET) != 0) {
+        fclose(capture);
+        errno = restoreErrno ? restoreErrno : errno;
+        return hfsw_err("failed to rewind hfsck output");
+    }
+
+    size_t outLen = (size_t)length;
+    char *buffer = (char *)malloc(outLen + 1);
+    if (!buffer) {
+        fclose(capture);
+        errno = ENOMEM;
+        return hfsw_err(NULL);
+    }
+
+    size_t nread = fread(buffer, 1, outLen, capture);
+    fclose(capture);
+    if (nread != outLen) {
+        free(buffer);
+        errno = EIO;
+        return hfsw_err("failed to read captured hfsck output");
+    }
+
+    buffer[outLen] = '\0';
+    *outOutput = buffer;
+    *outResult = result;
+
+    if (restoreErrno) {
+        errno = restoreErrno;
+        return hfsw_err("failed to restore stdio");
+    }
+
+    return hfsw_ok();
+}
+
+void
+hfsw_free_string(char *ptr)
+{
+    free(ptr);
 }
 
 HFSWError
