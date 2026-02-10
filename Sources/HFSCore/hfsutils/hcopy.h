@@ -24,10 +24,10 @@ typedef struct _hfsvol_ hfsvol;
 # include "copyout.h"
 
 cpifunc automode_unix(const char *);
-int do_copyin(hfsvol *, int, char *[], const char *, int);
+int do_copyin(hfsvol *, int, char *[], const char *, int, const char **);
 
 cpofunc automode_hfs(hfsvol *, const char *);
-int do_copyout(hfsvol *, int, char *[], const char *, int);
+int do_copyout(hfsvol *, int, char *[], const char *, int, const char **);
 
 # ifdef HFSUTILS_CLI
 int usage(void);

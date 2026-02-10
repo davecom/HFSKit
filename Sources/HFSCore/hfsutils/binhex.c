@@ -36,19 +36,9 @@ int dup(int);
 # include "binhex.h"
 # include "crc.h"
 
-const char *bh_error = "no error";
-
 extern int errno;
 
-# define ERROR(code, str)	(bh_error = (str), errno = (code))
-
-static FILE *file;			/* input/output file */
-static char line[67];			/* ASCII line buffer */
-static int lptr;			/* next char in line buffer */
-static int state86;			/* 8->6 encoding state */
-static unsigned char lastch;		/* last encoded data byte */
-static int runlen;			/* runlength of last data byte */
-static unsigned short crc;		/* incremental CRC word */
+# define ERROR(ctx, code, str)	((ctx)->error = (str), errno = (code))
 
 static const
 unsigned char zero[2] = { 0, 0 };
@@ -86,41 +76,54 @@ signed char demap[256] = {
 
 /* BinHex Encoding ========================================================= */
 
+void bh_init(bh_context *ctx)
+{
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->error = "no error";
+}
+
+const char *bh_get_error(const bh_context *ctx)
+{
+  return ctx->error;
+}
+
 /*
  * NAME:	bh->start()
  * DESCRIPTION:	begin BinHex encoding
  */
-int bh_start(int fd)
+int bh_start(bh_context *ctx, int fd)
 {
   int dupfd;
+  FILE *file;
 
   dupfd = dup(fd);
   if (dupfd == -1)
     {
-      ERROR(errno, "error duplicating output stream");
+      ERROR(ctx, errno, "error duplicating output stream");
       return -1;
     }
 
   file = fdopen(dupfd, "ab");
   if (file == 0)
     {
-      ERROR(errno, "error creating output buffer");
+      ERROR(ctx, errno, "error creating output buffer");
 
       close(dupfd);
       return -1;
     }
 
-  line[0] = ':';
-  lptr = 1;
+  ctx->file = file;
+  ctx->line[0] = ':';
+  ctx->lptr = 1;
 
-  state86 = 0;
-  runlen  = 0;
+  ctx->state86 = 0;
+  ctx->runlen  = 0;
 
-  crc = 0x0000;
+  ctx->crc = 0x0000;
 
   if (fputs(hqxheader, file) == EOF)
     {
-      ERROR(EIO, "error writing hqx header");
+      ERROR(ctx, EIO, "error writing hqx header");
 
       fclose(file);
       return -1;
@@ -134,18 +137,20 @@ int bh_start(int fd)
  * DESCRIPTION:	flush a line to the output file
  */
 static
-int flushline(void)
+int flushline(bh_context *ctx)
 {
-  line[lptr++] = '\n';
-  line[lptr++] = 0;
+  FILE *file = (FILE *)ctx->file;
 
-  if (fputs(line, file) == EOF)
+  ctx->line[ctx->lptr++] = '\n';
+  ctx->line[ctx->lptr++] = 0;
+
+  if (fputs(ctx->line, file) == EOF)
     {
-      ERROR(EIO, "error writing output data");
+      ERROR(ctx, EIO, "error writing output data");
       return -1;
     }
 
-  lptr = 0;
+  ctx->lptr = 0;
 
   return 0;
 }
@@ -155,7 +160,7 @@ int flushline(void)
  * DESCRIPTION:	insert bytes of data to the output stream
  */
 static
-int addchars(const unsigned char *data, register int len)
+int addchars(bh_context *ctx, const unsigned char *data, register int len)
 {
   register unsigned char c;
 
@@ -163,31 +168,31 @@ int addchars(const unsigned char *data, register int len)
     {
       c = *data++;
 
-      if (lptr == MAXLINELEN &&
-	  flushline() == -1)
+      if (ctx->lptr == MAXLINELEN &&
+	  flushline(ctx) == -1)
 	return -1;
 
-      switch (state86 & 0xff00)
+      switch (ctx->state86 & 0xff00)
 	{
 	case 0x0000:
-	  line[lptr++] = enmap[c >> 2];
-	  state86 = 0x0100 | (c & 0x03);
+	  ctx->line[ctx->lptr++] = enmap[c >> 2];
+	  ctx->state86 = 0x0100 | (c & 0x03);
 	  break;
 
 	case 0x0100:
-	  line[lptr++] = enmap[((state86 & 0x03) << 4) | (c >> 4)];
-	  state86 = 0x0200 | (c & 0x0f);
+	  ctx->line[ctx->lptr++] = enmap[((ctx->state86 & 0x03) << 4) | (c >> 4)];
+	  ctx->state86 = 0x0200 | (c & 0x0f);
 	  break;
 
 	case 0x0200:
-	  line[lptr++] = enmap[((state86 & 0x0f) << 2) | (c >> 6)];
+	  ctx->line[ctx->lptr++] = enmap[((ctx->state86 & 0x0f) << 2) | (c >> 6)];
 
-	  if (lptr == MAXLINELEN &&
-	      flushline() == -1)
+	  if (ctx->lptr == MAXLINELEN &&
+	      flushline(ctx) == -1)
 	    return -1;
 
-	  line[lptr++] = enmap[c & 0x3f];
-	  state86 = 0;
+	  ctx->line[ctx->lptr++] = enmap[c & 0x3f];
+	  ctx->state86 = 0;
 	  break;
 	}
     }
@@ -200,25 +205,25 @@ int addchars(const unsigned char *data, register int len)
  * DESCRIPTION:	run-length encode data
  */
 static
-int rleflush(void)
+int rleflush(bh_context *ctx)
 {
   unsigned char rle[] = { 0x90, 0x00, 0x90, 0x00 };
 
-  if ((lastch != 0x90 && runlen < 4) ||
-      (lastch == 0x90 && runlen < 3))
+  if ((ctx->lastch != 0x90 && ctx->runlen < 4) ||
+      (ctx->lastch == 0x90 && ctx->runlen < 3))
     {
       /* self representation */
 
-      if (lastch == 0x90)
+      if (ctx->lastch == 0x90)
 	{
-	  while (runlen--)
-	    if (addchars(rle, 2) == -1)
+	  while (ctx->runlen--)
+	    if (addchars(ctx, rle, 2) == -1)
 	      return -1;
 	}
       else
 	{
-	  while (runlen--)
-	    if (addchars(&lastch, 1) == -1)
+	  while (ctx->runlen--)
+	    if (addchars(ctx, &ctx->lastch, 1) == -1)
 	      return -1;
 	}
     }
@@ -226,24 +231,24 @@ int rleflush(void)
     {
       /* run-length encoded */
 
-      if (lastch == 0x90)
+      if (ctx->lastch == 0x90)
 	{
-	  rle[3] = runlen;
+	  rle[3] = ctx->runlen;
 
-	  if (addchars(rle, 4) == -1)
+	  if (addchars(ctx, rle, 4) == -1)
 	    return -1;
 	}
       else
 	{
-	  rle[1] = lastch;
-	  rle[3] = runlen;
+	  rle[1] = ctx->lastch;
+	  rle[3] = ctx->runlen;
 
-	  if (addchars(&rle[1], 3) == -1)
+	  if (addchars(ctx, &rle[1], 3) == -1)
 	    return -1;
 	}
     }
 
-  runlen = 0;
+  ctx->runlen = 0;
 
   return 0;
 }
@@ -252,31 +257,31 @@ int rleflush(void)
  * NAME:	bh->insert()
  * DESCRIPTION:	encode bytes of data, buffering lines and flushing
  */
-int bh_insert(const void *buf, register int len)
+int bh_insert(bh_context *ctx, const void *buf, register int len)
 {
   register const unsigned char *data = buf;
 
-  crc = crc_binh(data, len, crc);
+  ctx->crc = crc_binh(data, len, ctx->crc);
 
   for ( ; len--; ++data)
     {
-      if (runlen)
+      if (ctx->runlen)
 	{
-	  if (runlen == 0xff || lastch != *data)
+	  if (ctx->runlen == 0xff || ctx->lastch != *data)
 	    {
-	      if (rleflush() == -1)
+	      if (rleflush(ctx) == -1)
 		return -1;
 	    }
 
-	  if (lastch == *data)
+	  if (ctx->lastch == *data)
 	    {
-	      ++runlen;
+	      ++ctx->runlen;
 	      continue;
 	    }
 	}
 
-      lastch = *data;
-      runlen = 1;
+      ctx->lastch = *data;
+      ctx->runlen = 1;
     }
 
   return 0;
@@ -286,19 +291,19 @@ int bh_insert(const void *buf, register int len)
  * NAME:	bh->insertcrc()
  * DESCRIPTION:	insert a two-byte CRC checksum
  */
-int bh_insertcrc(void)
+int bh_insertcrc(bh_context *ctx)
 {
   unsigned char word[2];
 
-  crc = crc_binh(zero, 2, crc);
+  ctx->crc = crc_binh(zero, 2, ctx->crc);
 
-  word[0] = (crc & 0xff00) >> 8;
-  word[1] = (crc & 0x00ff) >> 0;
+  word[0] = (ctx->crc & 0xff00) >> 8;
+  word[1] = (ctx->crc & 0x00ff) >> 0;
 
-  if (bh_insert(word, 2) == -1)
+  if (bh_insert(ctx, word, 2) == -1)
     return -1;
 
-  crc = 0x0000;
+  ctx->crc = 0x0000;
 
   return 0;
 }
@@ -307,27 +312,28 @@ int bh_insertcrc(void)
  * NAME:	bh->end()
  * DESCRIPTION:	finish BinHex encoding
  */
-int bh_end(void)
+int bh_end(bh_context *ctx)
 {
   int result = 0;
+  FILE *file = (FILE *)ctx->file;
 
-  if (runlen &&
-      rleflush() == -1)
+  if (ctx->runlen &&
+      rleflush(ctx) == -1)
     result = -1;
 
-  if (state86 && result == 0 &&
-      addchars(zero, 1) == -1)
+  if (ctx->state86 && result == 0 &&
+      addchars(ctx, zero, 1) == -1)
     result = -1;
 
-  line[lptr++] = ':';
+  ctx->line[ctx->lptr++] = ':';
 
   if (result == 0 &&
-      flushline() == -1)
+      flushline(ctx) == -1)
     result = -1;
 
   if (fclose(file) == EOF && result == 0)
     {
-      ERROR(errno, "error flushing output data");
+      ERROR(ctx, errno, "error flushing output data");
       result = -1;
     }
 
@@ -340,31 +346,33 @@ int bh_end(void)
  * NAME:	bh->open()
  * DESCRIPTION:	begin BinHex decoding
  */
-int bh_open(int fd)
+int bh_open(bh_context *ctx, int fd)
 {
   int dupfd, c;
   const char *ptr;
+  FILE *file;
 
   dupfd = dup(fd);
   if (dupfd == -1)
     {
-      ERROR(errno, "error duplicating input stream");
+      ERROR(ctx, errno, "error duplicating input stream");
       return -1;
     }
 
   file = fdopen(dupfd, "rb");
   if (file == 0)
     {
-      ERROR(errno, "error creating input buffer");
+      ERROR(ctx, errno, "error creating input buffer");
 
       close(dupfd);
       return -1;
     }
 
-  state86 = 0;
-  runlen  = 0;
+  ctx->file = file;
+  ctx->state86 = 0;
+  ctx->runlen  = 0;
 
-  crc = 0x0000;
+  ctx->crc = 0x0000;
 
   /* find hqx header */
 
@@ -374,7 +382,7 @@ int bh_open(int fd)
       c = getc(file);
       if (c == EOF)
 	{
-	  ERROR(EINVAL, "hqx file header not found");
+	  ERROR(ctx, EINVAL, "hqx file header not found");
 
 	  fclose(file);
 	  return -1;
@@ -397,7 +405,7 @@ int bh_open(int fd)
       c = getc(file);
       if (c == EOF)
 	{
-	  ERROR(EINVAL, "corrupt hqx file");
+	  ERROR(ctx, EINVAL, "corrupt hqx file");
 
 	  fclose(file);
 	  return -1;
@@ -412,7 +420,7 @@ int bh_open(int fd)
       c = getc(file);
       if (c == EOF)
 	{
-	  ERROR(EINVAL, "corrupt hqx file");
+	  ERROR(ctx, EINVAL, "corrupt hqx file");
 
 	  fclose(file);
 	  return -1;
@@ -422,7 +430,7 @@ int bh_open(int fd)
 
   if (c != ':')
     {
-      ERROR(EINVAL, "corrupt hqx file");
+      ERROR(ctx, EINVAL, "corrupt hqx file");
 
       fclose(file);
       return -1;
@@ -436,8 +444,9 @@ int bh_open(int fd)
  * DESCRIPTION:	return the next hqx character from the input stream
  */
 static
-int hqxchar(void)
+int hqxchar(bh_context *ctx)
 {
+  FILE *file = (FILE *)ctx->file;
   int c;
 
   do
@@ -447,9 +456,9 @@ int hqxchar(void)
   if (c == EOF)
     {
       if (feof(file))
-	ERROR(EINVAL, "unexpected end of file");
+	ERROR(ctx, EINVAL, "unexpected end of file");
       else
-	ERROR(EIO, "error reading input file");
+	ERROR(ctx, EIO, "error reading input file");
 
       return -1;
     }
@@ -457,7 +466,7 @@ int hqxchar(void)
   c = demap[(unsigned char) c];
   if (c == 0)
     {
-      ERROR(EINVAL, "illegal character in hqx file");
+      ERROR(ctx, EINVAL, "illegal character in hqx file");
       return -1;
     }
 
@@ -469,33 +478,33 @@ int hqxchar(void)
  * DESCRIPTION:	decode one character from the hqx stream
  */
 static
-int nextchar(void)
+int nextchar(bh_context *ctx)
 {
   int c, c2, ch;
 
-  c = hqxchar();
+  c = hqxchar(ctx);
   if (c == -1)
     return -1;
 
-  switch (state86 & 0xff00)
+  switch (ctx->state86 & 0xff00)
     {
     case 0x0000:
-      c2 = hqxchar();
+      c2 = hqxchar(ctx);
       if (c2 == -1)
 	return -1;
 
       ch = (c << 2) | (c2 >> 4);
-      state86 = 0x0100 | (c2 & 0x0f);
+      ctx->state86 = 0x0100 | (c2 & 0x0f);
       break;
 
     case 0x0100:
-      ch = ((state86 & 0x0f) << 4) | (c >> 2);
-      state86 = 0x0200 | (c & 0x03);
+      ch = ((ctx->state86 & 0x0f) << 4) | (c >> 2);
+      ctx->state86 = 0x0200 | (c & 0x03);
       break;
 
     case 0x0200:
-      ch = ((state86 & 0x03) << 6) | c;
-      state86 = 0;
+      ch = ((ctx->state86 & 0x03) << 6) | c;
+      ctx->state86 = 0;
       break;
     }
 
@@ -506,7 +515,7 @@ int nextchar(void)
  * NAME:	bh->read()
  * DESCRIPTION:	decode and return bytes from the hqx stream
  */
-int bh_read(void *buf, register int len)
+int bh_read(bh_context *ctx, void *buf, register int len)
 {
   register unsigned char *data = buf;
   const unsigned char *ptr = data;
@@ -514,35 +523,35 @@ int bh_read(void *buf, register int len)
 
   while (len--)
     {
-      if (runlen)
+      if (ctx->runlen)
 	{
-	  *data++ = lastch;
-	  --runlen;
+	  *data++ = ctx->lastch;
+	  --ctx->runlen;
 	  continue;
 	}
 
-      c = nextchar();
+      c = nextchar(ctx);
       if (c == -1)
 	return -1;
 
       if (c == 0x90)
 	{
-	  rl = nextchar();
+	  rl = nextchar(ctx);
 	  if (rl == -1)
 	    return -1;
 
 	  if (rl > 0)
 	    {
-	      runlen = rl - 1;
+	      ctx->runlen = rl - 1;
 	      ++len;
 	      continue;
 	    }
 	}
 
-      *data++ = lastch = c;
+      *data++ = ctx->lastch = c;
     }
 
-  crc = crc_binh(ptr, count, crc);
+  ctx->crc = crc_binh(ptr, count, ctx->crc);
 
   return count;
 }
@@ -551,26 +560,26 @@ int bh_read(void *buf, register int len)
  * NAME:	bh->readcrc()
  * DESCRIPTION:	read and compare CRC bytes
  */
-int bh_readcrc(void)
+int bh_readcrc(bh_context *ctx)
 {
   unsigned short check;
   unsigned char word[2];
 
-  check = crc_binh(zero, 2, crc);
+  check = crc_binh(zero, 2, ctx->crc);
 
-  if (bh_read(word, 2) < 2)
+  if (bh_read(ctx, word, 2) < 2)
     return -1;
 
-  crc = (word[0] << 8) |
-        (word[1] << 0);
+  ctx->crc = (word[0] << 8) |
+             (word[1] << 0);
 
-  if (crc != check)
+  if (ctx->crc != check)
     {
-      ERROR(EINVAL, "CRC checksum error");
+      ERROR(ctx, EINVAL, "CRC checksum error");
       return -1;
     }
 
-  crc = 0x0000;
+  ctx->crc = 0x0000;
 
   return 0;
 }
@@ -579,8 +588,9 @@ int bh_readcrc(void)
  * NAME:	bh->close()
  * DESCRIPTION:	finish BinHex decoding
  */
-int bh_close(void)
+int bh_close(bh_context *ctx)
 {
+  FILE *file = (FILE *)ctx->file;
   int c, result = 0;
 
   /* skip whitespace */
@@ -602,13 +612,13 @@ int bh_close(void)
 
   if (c != ':')
     {
-      ERROR(EINVAL, "corrupt end of hqx file");
+      ERROR(ctx, EINVAL, "corrupt end of hqx file");
       result = -1;
     }
 
   if (fclose(file) == EOF && result == 0)
     {
-      ERROR(errno, "error closing input file");
+      ERROR(ctx, errno, "error closing input file");
       result = -1;
     }
 

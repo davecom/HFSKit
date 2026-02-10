@@ -19,14 +19,26 @@
  * $Id: binhex.h,v 1.7 1998/04/11 08:26:53 rob Exp $
  */
 
-extern const char *bh_error;
+typedef struct bh_context {
+  const char *error;
+  void *file;
+  char line[67];
+  int lptr;
+  int state86;
+  unsigned char lastch;
+  int runlen;
+  unsigned short crc;
+} bh_context;
 
-int bh_start(int);
-int bh_insert(const void *, register int);
-int bh_insertcrc(void);
-int bh_end(void);
+void bh_init(bh_context *);
+const char *bh_get_error(const bh_context *);
 
-int bh_open(int);
-int bh_read(void *, register int);
-int bh_readcrc(void);
-int bh_close(void);
+int bh_start(bh_context *, int);
+int bh_insert(bh_context *, const void *, register int);
+int bh_insertcrc(bh_context *);
+int bh_end(bh_context *);
+
+int bh_open(bh_context *, int);
+int bh_read(bh_context *, void *, register int);
+int bh_readcrc(bh_context *);
+int bh_close(bh_context *);

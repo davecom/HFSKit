@@ -85,17 +85,25 @@ cpifunc automode_unix(const char *path)
  * NAME:	do_copyin()
  * DESCRIPTION:	copy files from UNIX to HFS
  */
-int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
+int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode,
+	      const char **outError)
 {
   hfsdirent ent;
   struct stat sbuf;
   cpifunc copyfile;
+  cpi_context ctx;
   int i, result = 0;
+
+  cpi_init(&ctx);
+  if (outError)
+    *outError = 0;
 
   if (argc > 1 && (hfs_stat(vol, dest, &ent) == -1 ||
 		   ! (ent.flags & HFS_ISDIR)))
     {
       ERROR(ENOTDIR, 0);
+      if (outError)
+	*outError = "destination is not a directory";
 
       return 1;
     }
@@ -133,9 +141,11 @@ int do_copyin(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 	  if (mode == 'a')
 	    copyfile = automode_unix(argv[i]);
 
-	  if (copyfile(argv[i], vol, dest) == -1)
+	  if (copyfile(&ctx, argv[i], vol, dest) == -1)
 	    {
-	      ERROR(errno, cpi_error);
+	      ERROR(errno, cpi_get_error(&ctx));
+	      if (outError)
+		*outError = cpi_get_error(&ctx);
 
 	      result = 1;
 	    }
@@ -169,17 +179,25 @@ cpofunc automode_hfs(hfsvol *vol, const char *path)
  * NAME:	do_copyout()
  * DESCRIPTION:	copy files from HFS to UNIX
  */
-int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
+int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode,
+	       const char **outError)
 {
   struct stat sbuf;
   hfsdirent ent;
   cpofunc copyfile;
+  cpo_context ctx;
   int i, result = 0;
+
+  cpo_init(&ctx);
+  if (outError)
+    *outError = 0;
 
   if (argc > 1 && (stat(dest, &sbuf) == -1 ||
 		   ! S_ISDIR(sbuf.st_mode)))
     {
       ERROR(ENOTDIR, 0);
+      if (outError)
+	*outError = "destination is not a directory";
 
       return 1;
     }
@@ -217,9 +235,11 @@ int do_copyout(hfsvol *vol, int argc, char *argv[], const char *dest, int mode)
 	  if (mode == 'a')
 	    copyfile = automode_hfs(vol, argv[i]);
 
-	  if (copyfile(vol, argv[i], dest) == -1)
+	  if (copyfile(&ctx, vol, argv[i], dest) == -1)
 	    {
-	      ERROR(errno, cpo_error);
+	      ERROR(errno, cpo_get_error(&ctx));
+	      if (outError)
+		*outError = cpo_get_error(&ctx);
 
 	      result = 1;
 	    }
@@ -253,7 +273,7 @@ int hcopy_main(int argc, char *argv[])
   int fargc;
   char **fargv;
   hfsvol *vol;
-  int (*copy)(hfsvol *, int, char *[], const char *, int);
+  int (*copy)(hfsvol *, int, char *[], const char *, int, const char **);
 
   while (1)
     {
@@ -301,7 +321,7 @@ int hcopy_main(int argc, char *argv[])
     }
 
   if (result == 0)
-    result = copy(vol, fargc, fargv, target, mode);
+  result = copy(vol, fargc, fargv, target, mode, 0);
 
   hfsutil_unmount(vol, &result);
 

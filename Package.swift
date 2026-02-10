@@ -33,7 +33,7 @@ let package = Package(
         ),
         .testTarget(
             name: "HFSKitTests",
-            dependencies: ["HFSKit"],
+            dependencies: ["HFSKit", "HFSCore"],
             resources: [
                     .copy("Resources/test.img"),
                     .copy("Resources/test2.img"),

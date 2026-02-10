@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 /* libhfs header from hfsutils (must be in your include path). */
 #include "libhfs.h"
@@ -16,6 +17,7 @@
 #include "volume.h"
 #include "copyin.h"
 #include "hcopy.h"
+#include "binhex.h"
 
 int hfsck(hfsvol *, int);
 #define HFSCK_REPAIR  0x0001
@@ -721,6 +723,66 @@ hfsw_mode_to_hcopy_mode(int mode)
     }
 }
 
+static int
+hfsw_has_suffix_casefold(const char *value, const char *suffix)
+{
+    size_t valueLen, suffixLen;
+
+    if (!value || !suffix) {
+        return 0;
+    }
+
+    valueLen = strlen(value);
+    suffixLen = strlen(suffix);
+    if (valueLen < suffixLen) {
+        return 0;
+    }
+
+    return strcasecmp(value + (valueLen - suffixLen), suffix) == 0;
+}
+
+static char *
+hfsw_copyin_dest_with_decoded_suffix(const char *hfsDestPath, int resolvedMode)
+{
+    const char *suffix = NULL;
+    const char *base;
+    size_t prefixLen, baseLen, suffixLen, outLen;
+    char *out;
+
+    if (!hfsDestPath) {
+        return NULL;
+    }
+
+    if (resolvedMode == 'm') {
+        suffix = ".bin";
+    } else if (resolvedMode == 'b') {
+        suffix = ".hqx";
+    } else {
+        return NULL;
+    }
+
+    base = strrchr(hfsDestPath, ':');
+    base = base ? base + 1 : hfsDestPath;
+
+    if (base[0] == '\0' || !hfsw_has_suffix_casefold(base, suffix)) {
+        return NULL;
+    }
+
+    prefixLen = (size_t)(base - hfsDestPath);
+    baseLen = strlen(base);
+    suffixLen = strlen(suffix);
+    outLen = prefixLen + (baseLen - suffixLen) + 1;
+
+    out = (char *)malloc(outLen);
+    if (!out) {
+        return NULL;
+    }
+
+    memcpy(out, hfsDestPath, prefixLen + (baseLen - suffixLen));
+    out[prefixLen + (baseLen - suffixLen)] = '\0';
+    return out;
+}
+
 HFSWError
 hfsw_copy_in(HFSImage *image,
              const char *hostPath,
@@ -733,18 +795,39 @@ hfsw_copy_in(HFSImage *image,
     }
 
     int hcopyMode = hfsw_mode_to_hcopy_mode(mode);
+    int resolvedMode;
     if (hcopyMode == 0) {
         errno = EINVAL;
         return hfsw_err("unsupported copy mode");
     }
 
-    char *sources[1];
-    sources[0] = (char *)hostPath;
-
-    if (do_copyin(image->vol, 1, sources, hfsDestPath, hcopyMode) != 0) {
-        return hfsw_err(cpi_error);
+    resolvedMode = hcopyMode;
+    if (resolvedMode == 'a') {
+        cpifunc autoFunc = automode_unix(hostPath);
+        if (autoFunc == cpi_macb) {
+            resolvedMode = 'm';
+        } else if (autoFunc == cpi_binh) {
+            resolvedMode = 'b';
+        } else if (autoFunc == cpi_text) {
+            resolvedMode = 't';
+        } else {
+            resolvedMode = 'r';
+        }
     }
 
+    char *adjustedDest = hfsw_copyin_dest_with_decoded_suffix(hfsDestPath, resolvedMode);
+    const char *effectiveDest = adjustedDest ? adjustedDest : hfsDestPath;
+
+    char *sources[1];
+    sources[0] = (char *)hostPath;
+    const char *copyError = NULL;
+
+    if (do_copyin(image->vol, 1, sources, effectiveDest, hcopyMode, &copyError) != 0) {
+        free(adjustedDest);
+        return hfsw_err(copyError);
+    }
+
+    free(adjustedDest);
     return hfsw_ok();
 }
 
@@ -767,9 +850,10 @@ hfsw_copy_out(HFSImage *image,
 
     char *sources[1];
     sources[0] = (char *)hfsPath;
+    const char *copyError = NULL;
 
-    if (do_copyout(image->vol, 1, sources, hostDestPath, hcopyMode) != 0) {
-        return hfsw_err(cpo_error);
+    if (do_copyout(image->vol, 1, sources, hostDestPath, hcopyMode, &copyError) != 0) {
+        return hfsw_err(copyError);
     }
 
     return hfsw_ok();
@@ -828,6 +912,144 @@ hfsw_set_blessed(HFSImage *image,
     volEnt.blessed = dirEnt.cnid;
     if (hfs_vsetattr(image->vol, &volEnt) != 0) {
         return hfsw_err(hfs_error);
+    }
+
+    return hfsw_ok();
+}
+
+HFSWError
+hfsw_test_binhex_encode_file(const char *inputPath,
+                             const char *outputPath)
+{
+    if (!inputPath || !outputPath) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    int inFD = open(inputPath, O_RDONLY);
+    if (inFD == -1) {
+        return hfsw_err("failed to open BinHex encode input");
+    }
+
+    int outFD = open(outputPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (outFD == -1) {
+        int saved = errno;
+        close(inFD);
+        errno = saved;
+        return hfsw_err("failed to open BinHex encode output");
+    }
+
+    bh_context bh;
+    bh_init(&bh);
+
+    if (bh_start(&bh, outFD) == -1) {
+        int saved = errno;
+        close(inFD);
+        close(outFD);
+        errno = saved;
+        return hfsw_err(bh_get_error(&bh));
+    }
+
+    unsigned char buffer[4096];
+    int failed = 0;
+    while (1) {
+        ssize_t nread = read(inFD, buffer, sizeof(buffer));
+        if (nread == 0) {
+            break;
+        }
+        if (nread < 0) {
+            failed = 1;
+            errno = EIO;
+            break;
+        }
+        if (bh_insert(&bh, buffer, (int)nread) == -1) {
+            failed = 1;
+            break;
+        }
+    }
+
+    if (!failed && bh_insertcrc(&bh) == -1) {
+        failed = 1;
+    }
+    if (bh_end(&bh) == -1) {
+        failed = 1;
+    }
+
+    close(inFD);
+    close(outFD);
+
+    if (failed) {
+        return hfsw_err(bh_get_error(&bh));
+    }
+
+    return hfsw_ok();
+}
+
+HFSWError
+hfsw_test_binhex_decode_file(const char *inputPath,
+                             const char *outputPath,
+                             size_t decodedLength)
+{
+    if (!inputPath || !outputPath) {
+        errno = EINVAL;
+        return hfsw_err(NULL);
+    }
+
+    int inFD = open(inputPath, O_RDONLY);
+    if (inFD == -1) {
+        return hfsw_err("failed to open BinHex decode input");
+    }
+
+    int outFD = open(outputPath, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (outFD == -1) {
+        int saved = errno;
+        close(inFD);
+        errno = saved;
+        return hfsw_err("failed to open BinHex decode output");
+    }
+
+    bh_context bh;
+    bh_init(&bh);
+
+    if (bh_open(&bh, inFD) == -1) {
+        int saved = errno;
+        close(inFD);
+        close(outFD);
+        errno = saved;
+        return hfsw_err(bh_get_error(&bh));
+    }
+
+    unsigned char buffer[4096];
+    size_t remaining = decodedLength;
+    int failed = 0;
+
+    while (remaining > 0) {
+        int chunk = (remaining > sizeof(buffer)) ? (int)sizeof(buffer) : (int)remaining;
+        int nread = bh_read(&bh, buffer, chunk);
+        if (nread != chunk) {
+            failed = 1;
+            break;
+        }
+        if (write(outFD, buffer, (size_t)nread) != nread) {
+            failed = 1;
+            errno = EIO;
+            break;
+        }
+        remaining -= (size_t)nread;
+    }
+
+    if (!failed && bh_readcrc(&bh) == -1) {
+        failed = 1;
+    }
+    if (bh_close(&bh) == -1) {
+        failed = 1;
+    }
+
+    close(inFD);
+    close(outFD);
+
+    if (failed) {
+        return hfsw_err(bh_get_error(&bh));
     }
 
     return hfsw_ok();

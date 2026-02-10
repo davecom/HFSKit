@@ -46,11 +46,9 @@ int dup(int);
 # include "binhex.h"
 # include "crc.h"
 
-const char *cpi_error = "no error";
-
 extern int errno;
 
-# define ERROR(code, str)	(cpi_error = (str), errno = (code))
+# define ERROR(ctx, code, str)	((ctx)->error = (str), errno = (code))
 
 # define MACB_BLOCKSZ	128
 
@@ -60,6 +58,16 @@ extern int errno;
 # define RAW_TYPE	"????"
 # define RAW_CREA	"UNIX"
 
+void cpi_init(cpi_context *ctx)
+{
+  ctx->error = "no error";
+}
+
+const char *cpi_get_error(const cpi_context *ctx)
+{
+  return ctx->error;
+}
+
 /* Copy routines =========================================================== */
 
 /*
@@ -67,7 +75,7 @@ extern int errno;
  * DESCRIPTION:	copy a single fork for MacBinary II
  */
 static
-int fork_macb(int ifile, hfsfile *ofile, unsigned long size)
+int fork_macb(cpi_context *ctx, int ifile, hfsfile *ofile, unsigned long size)
 {
   char buf[HFS_BLOCKSZ * 4];
   unsigned long chunk, bytes;
@@ -80,12 +88,12 @@ int fork_macb(int ifile, hfsfile *ofile, unsigned long size)
       bytes = read(ifile, buf, chunk);
       if (bytes == (unsigned long) -1)
 	{
-	  ERROR(errno, "error reading data");
+	  ERROR(ctx, errno, "error reading data");
 	  return -1;
 	}
       else if (bytes != chunk)
 	{
-	  ERROR(EIO, "read incomplete chunk");
+	  ERROR(ctx, EIO, "read incomplete chunk");
 	  return -1;
 	}
 
@@ -94,12 +102,12 @@ int fork_macb(int ifile, hfsfile *ofile, unsigned long size)
       bytes = hfs_write(ofile, buf, chunk);
       if (bytes == (unsigned long) -1)
 	{
-	  ERROR(errno, hfs_error);
+	  ERROR(ctx, errno, hfs_error);
 	  return -1;
 	}
       else if (bytes != chunk)
 	{
-	  ERROR(EIO, "wrote incomplete chunk");
+	  ERROR(ctx, EIO, "wrote incomplete chunk");
 	  return -1;
 	}
 
@@ -114,25 +122,25 @@ int fork_macb(int ifile, hfsfile *ofile, unsigned long size)
  * DESCRIPTION:	perform copy using MacBinary II translation
  */
 static
-int do_macb(int ifile, hfsfile *ofile,
+int do_macb(cpi_context *ctx, int ifile, hfsfile *ofile,
 	    unsigned long dsize, unsigned long rsize)
 {
   if (hfs_setfork(ofile, 0) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       return -1;
     }
 
-  if (fork_macb(ifile, ofile, dsize) == -1)
+  if (fork_macb(ctx, ifile, ofile, dsize) == -1)
     return -1;
 
   if (hfs_setfork(ofile, 1) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       return -1;
     }
 
-  if (fork_macb(ifile, ofile, rsize) == -1)
+  if (fork_macb(ctx, ifile, ofile, rsize) == -1)
     return -1;
 
   return 0;
@@ -143,7 +151,7 @@ int do_macb(int ifile, hfsfile *ofile,
  * DESCRIPTION:	copy a single fork for BinHex
  */
 static
-int fork_binh(hfsfile *ofile, unsigned long size)
+int fork_binh(cpi_context *ctx, bh_context *bh, hfsfile *ofile, unsigned long size)
 {
   char buf[HFS_BLOCKSZ * 4];
   long chunk, bytes;
@@ -152,36 +160,36 @@ int fork_binh(hfsfile *ofile, unsigned long size)
     {
       chunk = (size > sizeof(buf)) ? sizeof(buf) : size;
 
-      bytes = bh_read(buf, chunk);
+      bytes = bh_read(bh, buf, chunk);
       if (bytes == -1)
 	{
-	  ERROR(errno, bh_error);
+	  ERROR(ctx, errno, bh_get_error(bh));
 	  return -1;
 	}
       else if (bytes != chunk)
 	{
-	  ERROR(EIO, "read incomplete chunk");
+	  ERROR(ctx, EIO, "read incomplete chunk");
 	  return -1;
 	}
 
       bytes = hfs_write(ofile, buf, chunk);
       if (bytes == -1)
 	{
-	  ERROR(errno, hfs_error);
+	  ERROR(ctx, errno, hfs_error);
 	  return -1;
 	}
       else if (bytes != chunk)
 	{
-	  ERROR(EIO, "wrote incomplete chunk");
+	  ERROR(ctx, EIO, "wrote incomplete chunk");
 	  return -1;
 	}
 
       size -= chunk;
     }
 
-  if (bh_readcrc() == -1)
+  if (bh_readcrc(bh) == -1)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
 
@@ -193,24 +201,24 @@ int fork_binh(hfsfile *ofile, unsigned long size)
  * DESCRIPTION:	perform copy using BinHex translation
  */
 static
-int do_binh(hfsfile *ofile, unsigned long dsize, unsigned long rsize)
+int do_binh(cpi_context *ctx, bh_context *bh, hfsfile *ofile, unsigned long dsize, unsigned long rsize)
 {
   if (hfs_setfork(ofile, 0) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       return -1;
     }
 
-  if (fork_binh(ofile, dsize) == -1)
+  if (fork_binh(ctx, bh, ofile, dsize) == -1)
     return -1;
 
   if (hfs_setfork(ofile, 1) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       return -1;
     }
 
-  if (fork_binh(ofile, rsize) == -1)
+  if (fork_binh(ctx, bh, ofile, rsize) == -1)
     return -1;
 
   return 0;
@@ -221,7 +229,7 @@ int do_binh(hfsfile *ofile, unsigned long dsize, unsigned long rsize)
  * DESCRIPTION:	perform copy using text translation
  */
 static
-int do_text(int ifile, hfsfile *ofile)
+int do_text(cpi_context *ctx, int ifile, hfsfile *ofile)
 {
   char buf[HFS_BLOCKSZ * 4], *ptr;
   long chunk, bytes;
@@ -232,7 +240,7 @@ int do_text(int ifile, hfsfile *ofile)
       chunk = read(ifile, buf, sizeof(buf));
       if (chunk == -1)
 	{
-	  ERROR(errno, "error reading source file");
+	  ERROR(ctx, errno, "error reading source file");
 	  return -1;
 	}
       else if (chunk == 0)
@@ -248,7 +256,7 @@ int do_text(int ifile, hfsfile *ofile)
       ptr = cs_macroman(buf, &len);
       if (ptr == 0)
 	{
-	  ERROR(ENOMEM, 0);
+	  ERROR(ctx, ENOMEM, 0);
 	  return -1;
 	}
 
@@ -257,12 +265,12 @@ int do_text(int ifile, hfsfile *ofile)
 
       if (bytes == -1)
 	{
-	  ERROR(errno, hfs_error);
+	  ERROR(ctx, errno, hfs_error);
 	  return -1;
 	}
       else if (bytes != len)
 	{
-	  ERROR(EIO, "wrote incomplete chunk");
+	  ERROR(ctx, EIO, "wrote incomplete chunk");
 	  return -1;
 	}
     }
@@ -275,7 +283,7 @@ int do_text(int ifile, hfsfile *ofile)
  * DESCRIPTION:	perform copy using no translation
  */
 static
-int do_raw(int ifile, hfsfile *ofile)
+int do_raw(cpi_context *ctx, int ifile, hfsfile *ofile)
 {
   char buf[HFS_BLOCKSZ * 4];
   long chunk, bytes;
@@ -285,7 +293,7 @@ int do_raw(int ifile, hfsfile *ofile)
       chunk = read(ifile, buf, sizeof(buf));
       if (chunk == -1)
 	{
-	  ERROR(errno, "error reading source file");
+	  ERROR(ctx, errno, "error reading source file");
 	  return -1;
 	}
       else if (chunk == 0)
@@ -294,12 +302,12 @@ int do_raw(int ifile, hfsfile *ofile)
       bytes = hfs_write(ofile, buf, chunk);
       if (bytes == -1)
 	{
-	  ERROR(errno, hfs_error);
+	  ERROR(ctx, errno, hfs_error);
 	  return -1;
 	}
       else if (bytes != chunk)
 	{
-	  ERROR(EIO, "wrote incomplete chunk");
+	  ERROR(ctx, EIO, "wrote incomplete chunk");
 	  return -1;
 	}
     }
@@ -314,11 +322,10 @@ int do_raw(int ifile, hfsfile *ofile)
  * DESCRIPTION:	open the source file; set hint for destination filename
  */
 static
-int opensrc(const char *srcname, const char **dsthint, const char *ext,
-	    int binary)
+int opensrc(cpi_context *ctx, const char *srcname, const char **dsthint, char *hintbuf,
+	    size_t hintbufsz, const char *ext, int binary)
 {
   int fd, len;
-  static char name[HFS_MAX_FLEN + 1];
   const char *cptr;
   char *ptr;
 
@@ -332,7 +339,7 @@ int opensrc(const char *srcname, const char **dsthint, const char *ext,
 
   if (fd == -1)
     {
-      ERROR(errno, "error opening source file");
+      ERROR(ctx, errno, "error opening source file");
       return -1;
     }
 
@@ -356,10 +363,16 @@ int opensrc(const char *srcname, const char **dsthint, const char *ext,
   if (len > HFS_MAX_FLEN)
     len = HFS_MAX_FLEN;
 
-  memcpy(name, cptr, len);
-  name[len] = 0;
+  if (hintbufsz < (size_t)(HFS_MAX_FLEN + 1)) {
+    ERROR(ctx, EINVAL, "destination hint buffer too small");
+    close(fd);
+    return -1;
+  }
 
-  for (ptr = name; *ptr; ++ptr)
+  memcpy(hintbuf, cptr, len);
+  hintbuf[len] = 0;
+
+  for (ptr = hintbuf; *ptr; ++ptr)
     {
       switch (*ptr)
 	{
@@ -373,7 +386,7 @@ int opensrc(const char *srcname, const char **dsthint, const char *ext,
 	}
     }
 
-  *dsthint = name;
+  *dsthint = hintbuf;
 
   return fd;
 }
@@ -383,7 +396,7 @@ int opensrc(const char *srcname, const char **dsthint, const char *ext,
  * DESCRIPTION:	open the destination file
  */
 static
-hfsfile *opendst(hfsvol *vol, const char *dstname, const char *hint,
+hfsfile *opendst(cpi_context *ctx, hfsvol *vol, const char *dstname, const char *hint,
 		 const char *type, const char *creator)
 {
   hfsdirent ent;
@@ -397,7 +410,7 @@ hfsfile *opendst(hfsvol *vol, const char *dstname, const char *hint,
 
       if (hfs_setcwd(vol, ent.cnid) == -1)
 	{
-	  ERROR(errno, hfs_error);
+	  ERROR(ctx, errno, hfs_error);
 	  return 0;
 	}
 
@@ -409,7 +422,7 @@ hfsfile *opendst(hfsvol *vol, const char *dstname, const char *hint,
   file = hfs_create(vol, dstname, type, creator);
   if (file == 0)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
 
       if (dstname == hint)
 	hfs_setcwd(vol, cwd);
@@ -421,7 +434,7 @@ hfsfile *opendst(hfsvol *vol, const char *dstname, const char *hint,
     {
       if (hfs_setcwd(vol, cwd) == -1)
 	{
-	  ERROR(errno, hfs_error);
+	  ERROR(ctx, errno, hfs_error);
 
 	  hfs_close(file);
 	  return 0;
@@ -436,17 +449,17 @@ hfsfile *opendst(hfsvol *vol, const char *dstname, const char *hint,
  * DESCRIPTION:	close source and destination files
  */
 static
-void closefiles(int ifile, hfsfile *ofile, int *result)
+void closefiles(cpi_context *ctx, int ifile, hfsfile *ofile, int *result)
 {
   if (ofile && hfs_close(ofile) == -1 && *result == 0)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       *result = -1;
     }
 
   if (close(ifile) == -1 && *result == 0)
     {
-      ERROR(errno, "error closing source file");
+      ERROR(ctx, errno, "error closing source file");
       *result = -1;
     }
 }
@@ -457,24 +470,25 @@ void closefiles(int ifile, hfsfile *ofile, int *result)
  * NAME:	cpi->macb()
  * DESCRIPTION:	copy a UNIX file to an HFS file using MacBinary II translation
  */
-int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
+int cpi_macb(cpi_context *ctx, const char *srcname, hfsvol *vol, const char *dstname)
 {
   int ifile, result = 0;
   hfsfile *ofile;
   hfsdirent ent;
   const char *dsthint;
+  char dsthintbuf[HFS_MAX_FLEN + 1];
   char type[5], creator[5];
   unsigned char buf[MACB_BLOCKSZ];
   unsigned short crc;
   unsigned long dsize, rsize;
 
-  ifile = opensrc(srcname, &dsthint, ".bin", 1);
+  ifile = opensrc(ctx, srcname, &dsthint, dsthintbuf, sizeof(dsthintbuf), ".bin", 1);
   if (ifile == -1)
     return -1;
 
   if (read(ifile, buf, MACB_BLOCKSZ) < MACB_BLOCKSZ)
     {
-      ERROR(errno, "error reading MacBinary file header");
+      ERROR(ctx, errno, "error reading MacBinary file header");
 
       close(ifile);
       return -1;
@@ -482,7 +496,7 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
 
   if (buf[0] != 0 || buf[74] != 0)
     {
-      ERROR(EINVAL, "invalid MacBinary file header");
+      ERROR(ctx, EINVAL, "invalid MacBinary file header");
 
       close(ifile);
       return -1;
@@ -494,7 +508,7 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
     {
       /* (buf[82] == 0) => MacBinary I? */
 
-      ERROR(EINVAL, "unknown, unsupported, or corrupt MacBinary file");
+      ERROR(ctx, EINVAL, "unknown, unsupported, or corrupt MacBinary file");
 
       close(ifile);
       return -1;
@@ -502,7 +516,7 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
 
   if (buf[123] > 129)
     {
-      ERROR(EINVAL, "unsupported MacBinary file version");
+      ERROR(ctx, EINVAL, "unsupported MacBinary file version");
 
       close(ifile);
       return -1;
@@ -511,7 +525,7 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
   if (buf[1] < 1 || buf[1] > 63 ||
       buf[2 + buf[1]] != 0)
     {
-      ERROR(EINVAL, "invalid MacBinary file header (bad file name)");
+      ERROR(ctx, EINVAL, "invalid MacBinary file header (bad file name)");
 
       close(ifile);
       return -1;
@@ -522,7 +536,7 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
 
   if (dsize > 0x7fffffff || rsize > 0x7fffffff)
     {
-      ERROR(EINVAL, "invalid MacBinary file header (bad file length)");
+      ERROR(ctx, EINVAL, "invalid MacBinary file header (bad file length)");
 
       close(ifile);
       return -1;
@@ -534,18 +548,18 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
   memcpy(creator, &buf[69], 4);
   type[4] = creator[4] = 0;
 
-  ofile = opendst(vol, dstname, dsthint, type, creator);
+  ofile = opendst(ctx, vol, dstname, dsthint, type, creator);
   if (ofile == 0)
     {
       close(ifile);
       return -1;
     }
 
-  result = do_macb(ifile, ofile, dsize, rsize);
+  result = do_macb(ctx, ifile, ofile, dsize, rsize);
 
   if (result == 0 && hfs_fstat(ofile, &ent) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       result = -1;
     }
 
@@ -557,11 +571,11 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
 
   if (result == 0 && hfs_fsetattr(ofile, &ent) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       result = -1;
     }
 
-  closefiles(ifile, ofile, &result);
+  closefiles(ctx, ifile, ofile, &result);
 
   return result;
 }
@@ -571,15 +585,15 @@ int cpi_macb(const char *srcname, hfsvol *vol, const char *dstname)
  * DESCRIPTION:	auxiliary BinHex routine
  */
 static
-int binhx(char *fname, char *type, char *creator, short *fdflags,
+int binhx(cpi_context *ctx, bh_context *bh, char *fname, char *type, char *creator, short *fdflags,
 	  unsigned long *dsize, unsigned long *rsize)
 {
   int len;
   unsigned char byte, word[2], lword[4];
 
-  if (bh_read(&byte, 1) < 1)
+  if (bh_read(bh, &byte, 1) < 1)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
 
@@ -587,54 +601,54 @@ int binhx(char *fname, char *type, char *creator, short *fdflags,
 
   if (len < 1 || len > HFS_MAX_FLEN)
     {
-      ERROR(EINVAL, "invalid BinHex file header (bad file name)");
+      ERROR(ctx, EINVAL, "invalid BinHex file header (bad file name)");
       return -1;
     }
 
-  if (bh_read(fname, len + 1) < len + 1)
+  if (bh_read(bh, fname, len + 1) < len + 1)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
 
   if (fname[len] != 0)
     {
-      ERROR(EINVAL, "invalid BinHex file header (bad file name)");
+      ERROR(ctx, EINVAL, "invalid BinHex file header (bad file name)");
       return -1;
     }
 
-  if (bh_read(type, 4) < 4 ||
-      bh_read(creator, 4) < 4 ||
-      bh_read(word, 2) < 2)
+  if (bh_read(bh, type, 4) < 4 ||
+      bh_read(bh, creator, 4) < 4 ||
+      bh_read(bh, word, 2) < 2)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
   *fdflags = d_getsw(word);
 
-  if (bh_read(lword, 4) < 4)
+  if (bh_read(bh, lword, 4) < 4)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
   *dsize = d_getul(lword);
 
-  if (bh_read(lword, 4) < 4)
+  if (bh_read(bh, lword, 4) < 4)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
   *rsize = d_getul(lword);
 
   if (*dsize > 0x7fffffff || *rsize > 0x7fffffff)
     {
-      ERROR(EINVAL, "invalid BinHex file header (bad file length)");
+      ERROR(ctx, EINVAL, "invalid BinHex file header (bad file length)");
       return -1;
     }
 
-  if (bh_readcrc() == -1)
+  if (bh_readcrc(bh) == -1)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(bh));
       return -1;
     }
 
@@ -645,56 +659,60 @@ int binhx(char *fname, char *type, char *creator, short *fdflags,
  * NAME:	cpi->binh()
  * DESCRIPTION:	copy a UNIX file to an HFS file using BinHex translation
  */
-int cpi_binh(const char *srcname, hfsvol *vol, const char *dstname)
+int cpi_binh(cpi_context *ctx, const char *srcname, hfsvol *vol, const char *dstname)
 {
   int ifile, result;
+  bh_context bh;
   hfsfile *ofile;
   hfsdirent ent;
   const char *dsthint;
+  char dsthintbuf[HFS_MAX_FLEN + 1];
   char fname[HFS_MAX_FLEN + 1], type[5], creator[5];
   short fdflags;
   unsigned long dsize, rsize;
 
-  ifile = opensrc(srcname, &dsthint, ".hqx", 0);
+  ifile = opensrc(ctx, srcname, &dsthint, dsthintbuf, sizeof(dsthintbuf), ".hqx", 0);
   if (ifile == -1)
     return -1;
 
-  if (bh_open(ifile) == -1)
+  bh_init(&bh);
+
+  if (bh_open(&bh, ifile) == -1)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(&bh));
 
       close(ifile);
       return -1;
     }
 
-  if (binhx(fname, type, creator, &fdflags, &dsize, &rsize) == -1)
+  if (binhx(ctx, &bh, fname, type, creator, &fdflags, &dsize, &rsize) == -1)
     {
-      bh_close();
+      bh_close(&bh);
       close(ifile);
       return -1;
     }
 
   dsthint = fname;
 
-  ofile = opendst(vol, dstname, dsthint, type, creator);
+  ofile = opendst(ctx, vol, dstname, dsthint, type, creator);
   if (ofile == 0)
     {
-      bh_close();
+      bh_close(&bh);
       close(ifile);
       return -1;
     }
 
-  result = do_binh(ofile, dsize, rsize);
+  result = do_binh(ctx, &bh, ofile, dsize, rsize);
 
-  if (bh_close() == -1 && result == 0)
+  if (bh_close(&bh) == -1 && result == 0)
     {
-      ERROR(errno, bh_error);
+      ERROR(ctx, errno, bh_get_error(&bh));
       result = -1;
     }
 
   if (result == 0 && hfs_fstat(ofile, &ent) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       result = -1;
     }
 
@@ -703,11 +721,11 @@ int cpi_binh(const char *srcname, hfsvol *vol, const char *dstname)
 
   if (result == 0 && hfs_fsetattr(ofile, &ent) == -1)
     {
-      ERROR(errno, hfs_error);
+      ERROR(ctx, errno, hfs_error);
       result = -1;
     }
 
-  closefiles(ifile, ofile, &result);
+  closefiles(ctx, ifile, ofile, &result);
 
   return result;
 }
@@ -716,26 +734,27 @@ int cpi_binh(const char *srcname, hfsvol *vol, const char *dstname)
  * NAME:	cpi->text()
  * DESCRIPTION:	copy a UNIX file to an HFS file using text translation
  */
-int cpi_text(const char *srcname, hfsvol *vol, const char *dstname)
+int cpi_text(cpi_context *ctx, const char *srcname, hfsvol *vol, const char *dstname)
 {
   int ifile, result = 0;
   hfsfile *ofile;
   const char *dsthint;
+  char dsthintbuf[HFS_MAX_FLEN + 1];
 
-  ifile = opensrc(srcname, &dsthint, ".txt", 0);
+  ifile = opensrc(ctx, srcname, &dsthint, dsthintbuf, sizeof(dsthintbuf), ".txt", 0);
   if (ifile == -1)
     return -1;
 
-  ofile = opendst(vol, dstname, dsthint, TEXT_TYPE, TEXT_CREA);
+  ofile = opendst(ctx, vol, dstname, dsthint, TEXT_TYPE, TEXT_CREA);
   if (ofile == 0)
     {
       close(ifile);
       return -1;
     }
 
-  result = do_text(ifile, ofile);
+  result = do_text(ctx, ifile, ofile);
 
-  closefiles(ifile, ofile, &result);
+  closefiles(ctx, ifile, ofile, &result);
 
   return result;
 }
@@ -744,26 +763,27 @@ int cpi_text(const char *srcname, hfsvol *vol, const char *dstname)
  * NAME:	cpi->raw()
  * DESCRIPTION:	copy a UNIX file to the data fork of an HFS file
  */
-int cpi_raw(const char *srcname, hfsvol *vol, const char *dstname)
+int cpi_raw(cpi_context *ctx, const char *srcname, hfsvol *vol, const char *dstname)
 {
   int ifile, result = 0;
   hfsfile *ofile;
   const char *dsthint;
+  char dsthintbuf[HFS_MAX_FLEN + 1];
 
-  ifile = opensrc(srcname, &dsthint, 0, 1);
+  ifile = opensrc(ctx, srcname, &dsthint, dsthintbuf, sizeof(dsthintbuf), 0, 1);
   if (ifile == -1)
     return -1;
 
-  ofile = opendst(vol, dstname, dsthint, RAW_TYPE, RAW_CREA);
+  ofile = opendst(ctx, vol, dstname, dsthint, RAW_TYPE, RAW_CREA);
   if (ofile == 0)
     {
       close(ifile);
       return -1;
     }
 
-  result = do_raw(ifile, ofile);
+  result = do_raw(ctx, ifile, ofile);
 
-  closefiles(ifile, ofile, &result);
+  closefiles(ctx, ifile, ofile, &result);
 
   return result;
 }

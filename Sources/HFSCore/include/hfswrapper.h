@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <time.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -119,6 +120,13 @@ HFSWError hfsw_hfsck(const char *path, int *outResult, char **outOutput);
 
 /* Free strings allocated by hfswrapper APIs (e.g. hfsw_hfsck output). */
 void hfsw_free_string(char *ptr);
+
+/* BinHex test helpers used by unit tests. */
+HFSWError hfsw_test_binhex_encode_file(const char *inputPath,
+                                       const char *outputPath);
+HFSWError hfsw_test_binhex_decode_file(const char *inputPath,
+                                       const char *outputPath,
+                                       size_t decodedLength);
 
 /* Enable/disable libhfs diagnostic logging (e.g. BLOCK: READ/WRITE). */
 void hfsw_set_debug_logging(int enabled);

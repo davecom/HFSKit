@@ -38,7 +38,7 @@
 # include "record.h"
 # include "volume.h"
 
-const char *hfs_error = "no error";	/* static error string */
+HFS_THREAD_LOCAL const char *hfs_error = "no error";	/* thread-local error */
 
 hfsvol *hfs_mounts;			/* linked list of mounted volumes */
 

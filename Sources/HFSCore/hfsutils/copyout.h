@@ -19,11 +19,22 @@
  * $Id: copyout.h,v 1.7 1998/04/11 08:26:54 rob Exp $
  */
 
-extern const char *cpo_error;
+/* copyout.h */
+#ifndef HFSUTILS_COPYOUT_H
+#define HFSUTILS_COPYOUT_H
 
-typedef int (*cpofunc)(hfsvol *, const char *, const char *);
+typedef struct cpo_context {
+  const char *error;
+} cpo_context;
 
-int cpo_macb(hfsvol *, const char *, const char *);
-int cpo_binh(hfsvol *, const char *, const char *);
-int cpo_text(hfsvol *, const char *, const char *);
-int cpo_raw(hfsvol *, const char *, const char *);
+void cpo_init(cpo_context *);
+const char *cpo_get_error(const cpo_context *);
+
+typedef int (*cpofunc)(cpo_context *, hfsvol *, const char *, const char *);
+
+int cpo_macb(cpo_context *, hfsvol *, const char *, const char *);
+int cpo_binh(cpo_context *, hfsvol *, const char *, const char *);
+int cpo_text(cpo_context *, hfsvol *, const char *, const char *);
+int cpo_raw(cpo_context *, hfsvol *, const char *, const char *);
+
+#endif

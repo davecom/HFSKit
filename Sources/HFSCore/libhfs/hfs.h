@@ -114,8 +114,19 @@ typedef struct {
 # define HFS_FNDR_ISINVISIBLE		(1 << 14)
 # define HFS_FNDR_ISALIAS		(1 << 15)
 
-extern const char *hfs_error;
 extern const unsigned char hfs_charorder[];
+/* Thread-local error detail storage shim for concurrent operations. */
+# if !defined(HFS_THREAD_LOCAL)
+#  if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+#   define HFS_THREAD_LOCAL _Thread_local
+#  elif defined(__GNUC__) || defined(__clang__)
+#   define HFS_THREAD_LOCAL __thread
+#  else
+#   define HFS_THREAD_LOCAL
+#  endif
+# endif
+
+extern HFS_THREAD_LOCAL const char *hfs_error;
 
 # define HFS_MODE_RDONLY	0
 # define HFS_MODE_RDWR		1

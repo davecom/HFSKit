@@ -19,11 +19,22 @@
  * $Id: copyin.h,v 1.6 1998/04/11 08:26:54 rob Exp $
  */
 
-extern const char *cpi_error;
+/* copyin.h */
+#ifndef HFSUTILS_COPYIN_H
+#define HFSUTILS_COPYIN_H
 
-typedef int (*cpifunc)(const char *, hfsvol *, const char *);
+typedef struct cpi_context {
+  const char *error;
+} cpi_context;
 
-int cpi_macb(const char *, hfsvol *, const char *);
-int cpi_binh(const char *, hfsvol *, const char *);
-int cpi_text(const char *, hfsvol *, const char *);
-int cpi_raw(const char *, hfsvol *, const char *);
+void cpi_init(cpi_context *);
+const char *cpi_get_error(const cpi_context *);
+
+typedef int (*cpifunc)(cpi_context *, const char *, hfsvol *, const char *);
+
+int cpi_macb(cpi_context *, const char *, hfsvol *, const char *);
+int cpi_binh(cpi_context *, const char *, hfsvol *, const char *);
+int cpi_text(cpi_context *, const char *, hfsvol *, const char *);
+int cpi_raw(cpi_context *, const char *, hfsvol *, const char *);
+
+#endif

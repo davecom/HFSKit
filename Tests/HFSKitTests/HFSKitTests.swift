@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import HFSCore
 @testable import HFSKit
 
 @Test func copyOutSampleFile() async throws {
@@ -609,39 +610,190 @@ import Testing
 
 @Test func binHexModeCopyInOutRoundTripAndRawControl() async throws {
     HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let volume = try makeWritableMultiVolume()
+        let tempDir = try makeTempDir()
+        let sampleURL = try binHexSampleURL()
+        let sampleData = try Data(contentsOf: sampleURL)
+
+        try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex.mode", mode: .binHex)
+        let modeInfo = try volume.attributes(of: "binhex.mode")
+        #expect(modeInfo.dataForkSize > 0)
+
+        try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex_sample.hqx", mode: .binHex)
+        expectThrows {
+            _ = try volume.attributes(of: "binhex_sample.hqx")
+        }
+        _ = try volume.attributes(of: "binhex_sample")
+
+        let modeOutURL = tempDir.appendingPathComponent("binhex.mode.out.hqx")
+        try volume.copyOut(hfsPath: "binhex.mode", toHostPath: modeOutURL, mode: .binHex)
+        #expect((try Data(contentsOf: modeOutURL)).count > 0)
+
+        try volume.copyIn(hostPath: modeOutURL, toHFSPath: "binhex.roundtrip", mode: .binHex)
+        let roundTripInfo = try volume.attributes(of: "binhex.roundtrip")
+        #expect(roundTripInfo.dataForkSize == modeInfo.dataForkSize)
+        #expect(roundTripInfo.resourceForkSize == modeInfo.resourceForkSize)
+        #expect(roundTripInfo.fileType == modeInfo.fileType)
+        #expect(roundTripInfo.fileCreator == modeInfo.fileCreator)
+
+        let modeRawOutURL2 = tempDir.appendingPathComponent("binhex.roundtrip.raw")
+        try volume.copyOut(hfsPath: "binhex.roundtrip", toHostPath: modeRawOutURL2, mode: .raw)
+
+        let modeRawOutURL = tempDir.appendingPathComponent("binhex.mode.raw")
+        try volume.copyOut(hfsPath: "binhex.mode", toHostPath: modeRawOutURL, mode: .raw)
+        #expect((try Data(contentsOf: modeRawOutURL)).count == modeInfo.dataForkSize)
+        #expect(try Data(contentsOf: modeRawOutURL2) == Data(contentsOf: modeRawOutURL))
+
+        try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex.raw", mode: .raw)
+        let rawInfo = try volume.attributes(of: "binhex.raw")
+        #expect(rawInfo.resourceForkSize == 0)
+        #expect(rawInfo.dataForkSize == sampleData.count)
+        #expect(modeInfo.dataForkSize != rawInfo.dataForkSize || modeInfo.resourceForkSize != rawInfo.resourceForkSize)
+    }
+}
+
+@Test func binHexCoreEncodeDecodeRoundTrip() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let tempDir = try makeTempDir()
+        let rawInURL = tempDir.appendingPathComponent("binhex-core.raw")
+        let hqxURL = tempDir.appendingPathComponent("binhex-core.hqx")
+        let rawOutURL = tempDir.appendingPathComponent("binhex-core.out.raw")
+
+        var bytes = Data((0..<2048).map { UInt8($0 & 0xff) })
+        bytes.append(contentsOf: [0x90, 0x90, 0x90, 0x90, 0x90, 0x00, 0x90])
+        try bytes.write(to: rawInURL)
+
+        let encodeError = hfsw_test_binhex_encode_file(rawInURL.path, hqxURL.path)
+        #expect(encodeError.code == 0, "\(describeCError(encodeError))")
+
+        let decodeError = hfsw_test_binhex_decode_file(hqxURL.path, rawOutURL.path, bytes.count)
+        #expect(decodeError.code == 0, "\(describeCError(decodeError))")
+
+        let roundTrip = try Data(contentsOf: rawOutURL)
+        #expect(roundTrip == bytes)
+    }
+}
+
+@Test func binHexCoreDecodeDetectsCorruption() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let tempDir = try makeTempDir()
+        let rawInURL = tempDir.appendingPathComponent("binhex-corrupt.raw")
+        let hqxURL = tempDir.appendingPathComponent("binhex-corrupt.hqx")
+        let rawOutURL = tempDir.appendingPathComponent("binhex-corrupt.out.raw")
+
+        let bytes = Data((0..<1024).map { UInt8(($0 * 7) & 0xff) })
+        try bytes.write(to: rawInURL)
+
+        let encodeError = hfsw_test_binhex_encode_file(rawInURL.path, hqxURL.path)
+        #expect(encodeError.code == 0, "\(describeCError(encodeError))")
+
+        var hqxData = try Data(contentsOf: hqxURL)
+        if let idx = hqxData.firstIndex(of: UInt8(ascii: ":")) {
+            let payloadIdx = hqxData.index(after: idx)
+            if payloadIdx < hqxData.endIndex {
+                hqxData[payloadIdx] = UInt8(ascii: "A")
+            }
+        }
+        try hqxData.write(to: hqxURL)
+
+        let decodeError = hfsw_test_binhex_decode_file(hqxURL.path, rawOutURL.path, bytes.count)
+        #expect(decodeError.code != 0)
+    }
+}
+
+@Test func binHexCoreEncodeDecodeEmptyPayload() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let tempDir = try makeTempDir()
+        let rawInURL = tempDir.appendingPathComponent("binhex-empty.raw")
+        let hqxURL = tempDir.appendingPathComponent("binhex-empty.hqx")
+        let rawOutURL = tempDir.appendingPathComponent("binhex-empty.out.raw")
+
+        try Data().write(to: rawInURL)
+
+        let encodeError = hfsw_test_binhex_encode_file(rawInURL.path, hqxURL.path)
+        #expect(encodeError.code == 0, "\(describeCError(encodeError))")
+
+        let decodeError = hfsw_test_binhex_decode_file(hqxURL.path, rawOutURL.path, 0)
+        #expect(decodeError.code == 0, "\(describeCError(decodeError))")
+
+        let roundTrip = try Data(contentsOf: rawOutURL)
+        #expect(roundTrip.isEmpty)
+    }
+}
+
+@Test func binHexCoreDecodeFailsWhenExpectedLengthIsWrong() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let tempDir = try makeTempDir()
+        let rawInURL = tempDir.appendingPathComponent("binhex-wrong-length.raw")
+        let hqxURL = tempDir.appendingPathComponent("binhex-wrong-length.hqx")
+        let rawOutURL = tempDir.appendingPathComponent("binhex-wrong-length.out.raw")
+
+        let bytes = Data((0..<256).map { UInt8($0 & 0xff) })
+        try bytes.write(to: rawInURL)
+
+        let encodeError = hfsw_test_binhex_encode_file(rawInURL.path, hqxURL.path)
+        #expect(encodeError.code == 0, "\(describeCError(encodeError))")
+
+        let decodeError = hfsw_test_binhex_decode_file(hqxURL.path, rawOutURL.path, bytes.count + 1)
+        #expect(decodeError.code != 0)
+    }
+}
+
+@Test func binHexCoreDecodeRejectsMissingHeader() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let tempDir = try makeTempDir()
+        let invalidURL = tempDir.appendingPathComponent("not-hqx.hqx")
+        let rawOutURL = tempDir.appendingPathComponent("not-hqx.out.raw")
+
+        try Data("definitely not binhex".utf8).write(to: invalidURL)
+
+        let decodeError = hfsw_test_binhex_decode_file(invalidURL.path, rawOutURL.path, 0)
+        #expect(decodeError.code != 0)
+    }
+}
+
+@Test func binHexCoreEncodeDecodeRandom1024RoundTrip() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    try withBinHexLock {
+        let tempDir = try makeTempDir()
+        let rawInURL = tempDir.appendingPathComponent("binhex-random-1024.raw")
+        let hqxURL = tempDir.appendingPathComponent("binhex-random-1024.hqx")
+        let rawOutURL = tempDir.appendingPathComponent("binhex-random-1024.out.raw")
+
+        var generator = SystemRandomNumberGenerator()
+        let bytes = Data((0..<1024).map { _ in UInt8.random(in: 0...255, using: &generator) })
+        try bytes.write(to: rawInURL)
+
+        let encodeError = hfsw_test_binhex_encode_file(rawInURL.path, hqxURL.path)
+        #expect(encodeError.code == 0, "\(describeCError(encodeError))")
+
+        let decodeError = hfsw_test_binhex_decode_file(hqxURL.path, rawOutURL.path, bytes.count)
+        #expect(decodeError.code == 0, "\(describeCError(decodeError))")
+
+        let roundTrip = try Data(contentsOf: rawOutURL)
+        #expect(roundTrip == bytes)
+    }
+}
+
+@Test func copyInMacBinaryRemovesBinExtensionFromDestinationName() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
     let volume = try makeWritableMultiVolume()
-    let tempDir = try makeTempDir()
-    let sampleURL = try binHexSampleURL()
-    let sampleData = try Data(contentsOf: sampleURL)
+    let sampleURL = try macBinarySampleURL()
 
-    try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex.mode", mode: .binHex)
-    let modeInfo = try volume.attributes(of: "binhex.mode")
-    #expect(modeInfo.dataForkSize > 0)
+    try volume.copyIn(hostPath: sampleURL,
+                      toHFSPath: "macbinary_sample.smi_.bin",
+                      mode: .macBinary)
 
-    let modeOutURL = tempDir.appendingPathComponent("binhex.mode.out.hqx")
-    try volume.copyOut(hfsPath: "binhex.mode", toHostPath: modeOutURL, mode: .binHex)
-    #expect((try Data(contentsOf: modeOutURL)).count > 0)
-
-    try volume.copyIn(hostPath: modeOutURL, toHFSPath: "binhex.roundtrip", mode: .binHex)
-    let roundTripInfo = try volume.attributes(of: "binhex.roundtrip")
-    #expect(roundTripInfo.dataForkSize == modeInfo.dataForkSize)
-    #expect(roundTripInfo.resourceForkSize == modeInfo.resourceForkSize)
-    #expect(roundTripInfo.fileType == modeInfo.fileType)
-    #expect(roundTripInfo.fileCreator == modeInfo.fileCreator)
-
-    let modeRawOutURL2 = tempDir.appendingPathComponent("binhex.roundtrip.raw")
-    try volume.copyOut(hfsPath: "binhex.roundtrip", toHostPath: modeRawOutURL2, mode: .raw)
-
-    let modeRawOutURL = tempDir.appendingPathComponent("binhex.mode.raw")
-    try volume.copyOut(hfsPath: "binhex.mode", toHostPath: modeRawOutURL, mode: .raw)
-    #expect((try Data(contentsOf: modeRawOutURL)).count == modeInfo.dataForkSize)
-    #expect(try Data(contentsOf: modeRawOutURL2) == Data(contentsOf: modeRawOutURL))
-
-    try volume.copyIn(hostPath: sampleURL, toHFSPath: "binhex.raw", mode: .raw)
-    let rawInfo = try volume.attributes(of: "binhex.raw")
-    #expect(rawInfo.resourceForkSize == 0)
-    #expect(rawInfo.dataForkSize == sampleData.count)
-    #expect(modeInfo.dataForkSize != rawInfo.dataForkSize || modeInfo.resourceForkSize != rawInfo.resourceForkSize)
+    expectThrows {
+        _ = try volume.attributes(of: "macbinary_sample.smi_.bin")
+    }
+    _ = try volume.attributes(of: "macbinary_sample.smi_")
 }
 
 @Test func textModeCopyInOutRoundTripAndRawControl() async throws {
@@ -755,6 +907,24 @@ private func expectThrows(_ block: () throws -> Void) {
     } catch {
         #expect(Bool(true))
     }
+}
+
+private func describeCError(_ err: HFSWError) -> String {
+    if err.code == 0 {
+        return "ok"
+    }
+    if let detail = err.detail {
+        return "errno=\(err.code) detail=\(String(cString: detail))"
+    }
+    return "errno=\(err.code)"
+}
+
+private let binHexTestLock = NSLock()
+
+private func withBinHexLock<T>(_ body: () throws -> T) throws -> T {
+    binHexTestLock.lock()
+    defer { binHexTestLock.unlock() }
+    return try body()
 }
 
 private func createHostDirectoryFixture(at url: URL) throws -> (URL, URL) {
