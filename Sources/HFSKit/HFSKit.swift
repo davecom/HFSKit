@@ -366,7 +366,7 @@ public final class HFSVolume {
         let h = try requireHandle()
 
         var cInfo = HFSWFileInfo()
-        let error = path.withCString { cPath in
+        let error = try withHFSPathCString(path) { cPath in
             hfsw_stat(h, cPath, &cInfo)
         }
         try throwIfError(error, operation: "stat", path: path)
@@ -406,7 +406,7 @@ public final class HFSVolume {
             ctx.items.append(swiftInfo)
         }
 
-        let status = context.basePath.withCString { cPath in
+        let status = try withHFSPathCString(context.basePath) { cPath in
             hfsw_list_dir(h, cPath, callback, ctxPtr)
         }
 
@@ -431,7 +431,7 @@ public final class HFSVolume {
 
     public func delete(path: String) throws {
         let h = try requireHandle()
-        let error = path.withCString { cPath in
+        let error = try withHFSPathCString(path) { cPath in
             hfsw_delete(h, cPath)
         }
         try throwIfError(error, operation: "delete", path: path)
@@ -447,8 +447,8 @@ public final class HFSVolume {
 
     public func rename(path: String, to newName: String) throws {
         let h = try requireHandle()
-        let error = path.withCString { cOld in
-            newName.withCString { cNew in
+        let error = try withHFSPathCString(path) { cOld in
+            try withHFSPathCString(newName) { cNew in
                 hfsw_rename(h, cOld, cNew)
             }
         }
@@ -461,8 +461,8 @@ public final class HFSVolume {
 
     public func move(path: String, toParentDirectory: String) throws {
         let h = try requireHandle()
-        let error = path.withCString { cOld in
-            toParentDirectory.withCString { cParent in
+        let error = try withHFSPathCString(path) { cOld in
+            try withHFSPathCString(toParentDirectory) { cParent in
                 hfsw_move(h, cOld, cParent)
             }
         }
@@ -475,7 +475,7 @@ public final class HFSVolume {
 
     public func makeDirectory(path: String) throws {
         let h = try requireHandle()
-        let error = path.withCString { cPath in
+        let error = try withHFSPathCString(path) { cPath in
             hfsw_mkdir(h, cPath)
         }
         try throwIfError(error, operation: "mkdir", path: path)
@@ -501,8 +501,8 @@ public final class HFSVolume {
     {
         let h = try requireHandle()
 
-        let error = hostPath.path.withCString { cHost in
-            hfsPath.withCString { cHFS in
+        let error = try hostPath.path.withCString { cHost in
+            try withHFSPathCString(hfsPath) { cHFS in
                 hfsw_copy_in(h, cHost, cHFS, mode.rawValue)
             }
         }
@@ -528,7 +528,7 @@ public final class HFSVolume {
     {
         let h = try requireHandle()
 
-        let error = hfsPath.withCString { cHFS in
+        let error = try withHFSPathCString(hfsPath) { cHFS in
             hostPath.path.withCString { cHost in
                 hfsw_copy_out(h, cHFS, cHost, mode.rawValue)
             }
@@ -612,7 +612,7 @@ public final class HFSVolume {
     {
         let h = try requireHandle()
 
-        let error = path.withCString { cPath in
+        let error = try withHFSPathCString(path) { cPath in
             fileType.withCString { cType in
                 fileCreator.withCString { cCreator in
                     hfsw_set_type_creator(h, cPath, cType, cCreator)
@@ -633,7 +633,7 @@ public final class HFSVolume {
     public func setBlessed(path: String) throws {
         let h = try requireHandle()
 
-        let error = path.withCString { cPath in
+        let error = try withHFSPathCString(path) { cPath in
             hfsw_set_blessed(h, cPath)
         }
 
@@ -721,10 +721,32 @@ private extension HFSVolumeInfo {
 }
 
 private func stringFromFixedArray<T>(_ array: T) -> String {
-    return withUnsafePointer(to: array) { ptr in
-        ptr.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: array)) { cPtr in
-            String(cString: cPtr)
+    return withUnsafeBytes(of: array) { raw in
+        let bytes = raw.bindMemory(to: UInt8.self)
+        let end = bytes.firstIndex(of: 0) ?? bytes.count
+        let data = Data(bytes[..<end])
+        return String(data: data, encoding: .macOSRoman)
+            ?? String(data: data, encoding: .utf8)
+            ?? String(decoding: bytes[..<end], as: UTF8.self)
+    }
+}
+
+private func withHFSPathCString<R>(_ hfsPath: String,
+                                   _ body: (UnsafePointer<CChar>) throws -> R) throws -> R
+{
+    guard let data = hfsPath.data(using: .macOSRoman, allowLossyConversion: false) else {
+        throw HFSError.invalidArgument(
+            "HFS path contains characters not representable in MacRoman: \(hfsPath)"
+        )
+    }
+
+    var bytes = [UInt8](data)
+    bytes.append(0)
+    return try bytes.withUnsafeBufferPointer { buffer in
+        guard let base = buffer.baseAddress else {
+            throw HFSError.invalidArgument("Empty HFS path buffer")
         }
+        return try body(UnsafeRawPointer(base).assumingMemoryBound(to: CChar.self))
     }
 }
 

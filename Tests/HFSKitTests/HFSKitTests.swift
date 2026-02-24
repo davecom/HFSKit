@@ -838,6 +838,29 @@ import HFSCore
     #expect(try Data(contentsOf: rawTextOutURL) == sampleData)
 }
 
+@Test func macRomanDirectoryNameRoundTripAndList() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableVolume()
+    let tempDir = try makeTempDir()
+    let hostFile = tempDir.appendingPathComponent("host.txt")
+    try Data("macroman".utf8).write(to: hostFile)
+
+    try volume.makeDirectory(path: ":Café")
+    try volume.copyIn(hostPath: hostFile, toHFSPath: ":Café:touché.txt", mode: .raw)
+
+    let rootEntries = try volume.list(directory: ":")
+    let cafe = try #require(rootEntries.first(where: { $0.name == "Café" }))
+    #expect(cafe.isDirectory)
+
+    let cafeEntries = try volume.list(directory: ":Café")
+    let file = try #require(cafeEntries.first(where: { $0.name == "touché.txt" }))
+    #expect(!file.isDirectory)
+
+    let attrs = try volume.attributes(of: ":Café:touché.txt")
+    #expect(attrs.name == "touché.txt")
+    #expect(attrs.dataForkSize == Data("macroman".utf8).count)
+}
+
 private func testImageURL() throws -> URL {
     guard let imgURL = Bundle.module.url(forResource: "test", withExtension: "img") else {
         throw HFSError.invalidArgument("Missing test image resource")
