@@ -631,8 +631,50 @@ hfsw_rename(HFSImage *image,
         return hfsw_err(NULL);
     }
 
-    /* hfs_rename takes (vol, oldPath, newName) where newName is a bare name. */
-    if (hfs_rename(image->vol, (char *)hfsOldPath, (char *)newName) != 0) {
+    if (newName[0] == '\0' || strchr(newName, ':') != NULL) {
+        errno = EINVAL;
+        return hfsw_err("new name must be a non-empty basename without ':'");
+    }
+
+    /* Keep the item in its current parent directory when renaming. */
+    const char *lastColon = strrchr(hfsOldPath, ':');
+    const char *parentPath = ":";
+    char *parentOwned = NULL;
+
+    if (lastColon != NULL) {
+        if (lastColon != hfsOldPath) {
+            size_t parentLen = (size_t)(lastColon - hfsOldPath);
+            parentOwned = (char *)malloc(parentLen + 1);
+            if (!parentOwned) {
+                errno = ENOMEM;
+                return hfsw_err(NULL);
+            }
+            memcpy(parentOwned, hfsOldPath, parentLen);
+            parentOwned[parentLen] = '\0';
+            parentPath = parentOwned;
+        }
+    }
+
+    size_t parentLen = strlen(parentPath);
+    int needsSep = (parentLen > 0 && parentPath[parentLen - 1] != ':');
+    size_t destLen = parentLen + (needsSep ? 1 : 0) + strlen(newName) + 1;
+    char *destPath = (char *)malloc(destLen);
+    if (!destPath) {
+        free(parentOwned);
+        errno = ENOMEM;
+        return hfsw_err(NULL);
+    }
+
+    if (needsSep) {
+        snprintf(destPath, destLen, "%s:%s", parentPath, newName);
+    } else {
+        snprintf(destPath, destLen, "%s%s", parentPath, newName);
+    }
+
+    int result = hfs_rename(image->vol, (char *)hfsOldPath, destPath);
+    free(parentOwned);
+    free(destPath);
+    if (result != 0) {
         return hfsw_err(hfs_error);
     }
 

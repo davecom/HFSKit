@@ -595,7 +595,8 @@ public final class HFSVolume {
 
         for entry in try list(directory: hfsPath) {
             let entryHFSPath = joinHFSPath(hfsPath, entry.name)
-            let entryHostURL = hostDirectory.appendingPathComponent(entry.name)
+            let safeName = sanitizeHostPathComponent(entry.name)
+            let entryHostURL = hostDirectory.appendingPathComponent(safeName)
             if entry.isDirectory {
                 try copyOutDirectory(hfsPath: entryHFSPath, toHostDirectory: entryHostURL, mode: mode)
             } else {
@@ -754,6 +755,13 @@ private func joinHFSPath(_ base: String, _ name: String) -> String {
     if base == ":" { return ":\(name)" }
     if base.hasSuffix(":") { return base + name }
     return base + ":\(name)"
+}
+
+private func sanitizeHostPathComponent(_ name: String) -> String {
+    if name.contains("/") {
+        return name.replacingOccurrences(of: "/", with: "-")
+    }
+    return name
 }
 
 private func formatMessage(prefix: String,

@@ -291,6 +291,35 @@ import HFSCore
     #expect(!entries.contains { $0.name == "mountain" })
 }
 
+@Test func renameNestedFileStaysInParentDirectory() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableVolume()
+    let mountainURL = try mountainURL()
+
+    try volume.makeDirectory(path: ":Folder")
+    try volume.copyIn(hostPath: mountainURL, toHFSPath: ":Folder:mountain")
+    try volume.rename(path: ":Folder:mountain", to: "renamed")
+
+    _ = try volume.attributes(of: ":Folder:renamed")
+    expectThrows {
+        _ = try volume.attributes(of: ":renamed")
+    }
+}
+
+@Test func renameNestedFolderStaysInParentDirectory() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableVolume()
+
+    try volume.makeDirectory(path: ":Parent")
+    try volume.makeDirectory(path: ":Parent:Child")
+    try volume.rename(path: ":Parent:Child", to: "RenamedChild")
+
+    _ = try volume.attributes(of: ":Parent:RenamedChild")
+    expectThrows {
+        _ = try volume.attributes(of: ":RenamedChild")
+    }
+}
+
 @Test func moveFileToDirectory() async throws {
     HFSKitSettings.verboseLoggingEnabled = false
     let mountainURL = try mountainURL()
@@ -471,6 +500,24 @@ import HFSCore
     #expect(try Data(contentsOf: copiedNested) == Data(contentsOf: nestedFileURL))
     var isDir: ObjCBool = false
     #expect(FileManager.default.fileExists(atPath: copiedEmptyDir.path, isDirectory: &isDir) && isDir.boolValue)
+}
+
+@Test func copyOutDirectorySanitizesSlashInNames() async throws {
+    HFSKitSettings.verboseLoggingEnabled = false
+    let volume = try makeWritableVolume()
+    let mountainURL = try mountainURL()
+    let tempDir = try makeTempDir()
+    let outputDir = tempDir.appendingPathComponent("SlashOutput", isDirectory: true)
+
+    try volume.makeDirectory(path: ":SlashTest")
+    try volume.copyIn(hostPath: mountainURL, toHFSPath: ":SlashTest:mountain")
+    try volume.rename(path: ":SlashTest:mountain", to: "a/b")
+
+    try volume.copyOutDirectory(hfsPath: ":SlashTest", toHostDirectory: outputDir, mode: .raw)
+
+    let sanitized = outputDir.appendingPathComponent("a-b")
+    #expect(FileManager.default.fileExists(atPath: sanitized.path))
+    #expect(!FileManager.default.fileExists(atPath: outputDir.appendingPathComponent("a", isDirectory: true).path))
 }
 
 @Test func overwriteFileReplacesContents() async throws {
